@@ -1,0 +1,17 @@
+{
+  "name": "fixture-demo",
+  "version": "1.0.0",
+  "description": "Fixture Claude Code plugin with one of each component",
+  "author": { "name": "Fixture" },
+  "defaultEnabled": true,
+  "mcpServers": {
+    "echo-api": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp-echo.js"],
+      "env": {
+        "PLUGIN_ROOT": "${CLAUDE_PLUGIN_ROOT}",
+        "FROM_ENV": "${FIXTURE_TOKEN}"
+      }
+    }
+  }
+}
