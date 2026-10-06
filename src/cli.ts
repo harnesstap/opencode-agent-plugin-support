@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 import path from "node:path";
 import { discoverEnabledPlugins, loadPluginFromDirectory } from "./discover.js";
-import { loadActivation, saveProjectActivation, saveUserActivation, setEnabled } from "./enablement.js";
+import {
+  loadActivation,
+  setLayerEnabled,
+  setUserExtraMarketplaces,
+} from "./enablement.js";
 import { defaultRuntimePaths } from "./paths.js";
 import { saveKnownMarketplace, upsertInstallation } from "./registry-write.js";
 import { findPluginRoot, loadManifestFromRoot } from "./manifest.js";
@@ -10,9 +14,9 @@ function usage(): string {
   return `opencode-claude-plugins <command>
 
 Commands:
-  list                         Show installed / enabled Claude plugins
-  enable <id> [--project]      Enable plugin id (name@marketplace)
-  disable <id> [--project]     Disable plugin id
+  list                         Show installed plugins with effective enablement and source
+  enable <id> [--project]      Set enabledPlugins[id]=true (user or project file)
+  disable <id> [--project]     Set enabledPlugins[id]=false (user or project file)
   install-local <dir> [id]     Register a local plugin directory
   marketplace-add <name> <src> Record an extra marketplace (github:org/repo or path)
 `;
@@ -33,17 +37,22 @@ function main(argv: string[]): number {
         JSON.stringify(
           {
             pluginsDir: path.join(paths.home, ".agents", "plugins"),
-            enabled: discovered.enabled.map((plugin) => ({
-              id: plugin.id,
-              root: plugin.pluginRoot,
-              skills: plugin.skills.map((skill) => skill.name),
-              commands: plugin.commands.map((item) => item.name),
-              agents: plugin.agents.map((item) => item.name),
-              mcp: Object.keys(plugin.mcp),
-              hooks: Object.keys(plugin.hooks),
+            userFile: discovered.activation.user.path,
+            projectFile: discovered.activation.project.path,
+            plugins: discovered.statuses.map((status) => ({
+              id: status.id,
+              enabled: status.enabled,
+              source: status.source,
+              sourceFile: status.sourceFile ?? null,
+              sourceKey: status.sourceKey ?? null,
+              reason: status.reason ?? null,
+              root: status.plugin?.pluginRoot ?? null,
+              skills: status.plugin?.skills.map((skill) => skill.name) ?? [],
+              commands: status.plugin?.commands.map((item) => item.name) ?? [],
+              agents: status.plugin?.agents.map((item) => item.name) ?? [],
+              mcp: status.plugin ? Object.keys(status.plugin.mcp) : [],
+              hooks: status.plugin ? Object.keys(status.plugin.hooks) : [],
             })),
-            skipped: discovered.skipped,
-            installed: discovered.installed.map((item) => item.id),
           },
           null,
           2,
@@ -58,12 +67,23 @@ function main(argv: string[]): number {
         process.stderr.write("missing plugin id\n");
         return 1;
       }
-      const project = rest.includes("--project");
-      const current = loadActivation(paths);
-      const next = setEnabled(current, id, cmd === "enable");
-      if (project) saveProjectActivation(paths, next);
-      else saveUserActivation(paths, next);
-      process.stdout.write(`${cmd}d ${id}\n`);
+      const layer = rest.includes("--project") ? "project" : "user";
+      const decision = setLayerEnabled(paths, id, cmd === "enable", layer);
+      process.stdout.write(
+        JSON.stringify(
+          {
+            id,
+            requested: cmd === "enable",
+            wroteTo: layer,
+            enabled: decision.enabled,
+            source: decision.source,
+            sourceFile: decision.file ?? null,
+            sourceKey: decision.key ?? null,
+          },
+          null,
+          2,
+        ) + "\n",
+      );
       return 0;
     }
     case "install-local": {
@@ -84,8 +104,6 @@ function main(argv: string[]): number {
         installedAt: new Date().toISOString(),
         lastUpdated: new Date().toISOString(),
       });
-      const activation = setEnabled(loadActivation(paths), id, true);
-      saveUserActivation(paths, activation);
       loadPluginFromDirectory(root, id, paths);
       process.stdout.write(`installed ${id} from ${root}\n`);
       return 0;
@@ -104,12 +122,9 @@ function main(argv: string[]): number {
           : { source: "directory", path: path.resolve(src) };
       saveKnownMarketplace(paths, name, source);
       const activation = loadActivation(paths);
-      saveUserActivation(paths, {
-        ...activation,
-        extraKnownMarketplaces: {
-          ...activation.extraKnownMarketplaces,
-          [name]: { source },
-        },
+      setUserExtraMarketplaces(paths, {
+        ...activation.user.extraKnownMarketplaces,
+        [name]: { source },
       });
       process.stdout.write(`added marketplace ${name}\n`);
       return 0;

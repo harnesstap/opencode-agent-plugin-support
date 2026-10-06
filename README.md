@@ -25,12 +25,14 @@ Restart OpenCode after installing. npm plugins are installed by OpenCode into `~
 
 ## Storage layout (Claude-compatible)
 
-Activation (the plugin-related slice of Claude’s `settings.json`) lives next to other agent files:
+Activation is **only** read from:
 
-| File | Claude equivalent |
+| File | Role |
 | --- | --- |
-| `~/.agents/plugins.json` | `enabledPlugins` + `extraKnownMarketplaces` in `~/.claude/settings.json` |
-| `<repo>/.agents/plugins.json` | project `.claude/settings.json` (same keys) |
+| `~/.agents/plugins.json` | User-level `enabledPlugins` + `extraKnownMarketplaces` |
+| `<repo>/.agents/plugins.json` | Project-level overlay (same schema). Overrides user keys |
+
+Claude’s `~/.claude/settings.json` and `<repo>/.claude/settings.json` are **not** read.
 
 Everything else is under `~/.agents/plugins/`, matching `~/.claude/plugins/`:
 
@@ -54,25 +56,23 @@ mkdir -p ~/.agents
 ln -s ~/.claude/plugins ~/.agents/plugins
 ```
 
-Then copy or symlink enablement:
+That shares the install cache. Enablement is separate: copy the `enabledPlugins` map into `~/.agents/plugins.json` if you want the same on/off state, or omit the file and every installed plugin stays on.
 
-```bash
-# Option A: keep a dedicated file (same schema)
-cp ~/.claude/settings.json /tmp/claude-settings.json
-# extract enabledPlugins / extraKnownMarketplaces into ~/.agents/plugins.json
+### Enablement
 
-# Option B: this plugin also reads Claude settings as a fallback
-# ~/.claude/settings.json and <repo>/.claude/settings.json
-```
+Every plugin listed in `installed_plugins.json` with a resolvable `installPath` is **enabled** unless `enabledPlugins` sets it to `false`.
 
-Enablement merge (later wins): Claude user → `~/.agents/plugins.json` → Claude project → `<repo>/.agents/plugins.json`.
+- Missing `plugins.json` → all installed plugins enabled (`source: "default"`).
+- Missing key → enabled (`source: "default"`).
+- `"id": true` or `"id": false` in the user file → `source: "user"`.
+- Same keys in the project file override the user file → `source: "project"`.
+- Manifest `defaultEnabled` is ignored.
 
 `plugins.json` shape:
 
 ```json
 {
   "enabledPlugins": {
-    "fixture-demo@local": true,
     "some-plugin@claude-plugins-official": false
   },
   "extraKnownMarketplaces": {
@@ -83,7 +83,7 @@ Enablement merge (later wins): Claude user → `~/.agents/plugins.json` → Clau
 }
 ```
 
-A missing key falls back to the plugin manifest’s `defaultEnabled` (Claude default: `true`).
+`opencode-claude-plugins list` prints each installed plugin’s effective `enabled` flag and `source` (`default` | `user` | `project`). `enable` / `disable` write only the targeted file (`--project` for the repo file) and echo the effective state.
 
 ## How injection works
 
@@ -142,7 +142,7 @@ npx opencode-claude-plugins install-local ./my-claude-plugin [name@local]
 npx opencode-claude-plugins marketplace-add my-market github:org/repo
 ```
 
-`install-local` writes `installed_plugins.json` (v2) and enables the plugin in `~/.agents/plugins.json`. It does not clone git marketplaces.
+`install-local` writes `installed_plugins.json` (v2). The plugin is enabled by default until you `disable` it. It does not clone git marketplaces.
 
 ## Develop
 

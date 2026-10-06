@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mapClaudeModel } from "../src/agents.js";
 import { loadCommands } from "../src/commands.js";
 import { discoverEnabledPlugins, loadPluginFromDirectory } from "../src/discover.js";
-import { isPluginEnabled, loadActivation, parsePluginId } from "../src/enablement.js";
+import { isPluginEnabled, loadActivation, parsePluginId, resolvePluginEnablement, setLayerEnabled } from "../src/enablement.js";
 import { expandString } from "../src/expand.js";
 import { parseFrontmatter, splitList } from "../src/frontmatter.js";
 import { interpretHookResult, runHookCommand } from "../src/hook-runtime.js";
@@ -63,15 +63,34 @@ describe("enablement", () => {
     expect(parsePluginId("demo@shop")).toEqual({ name: "demo", marketplace: "shop", id: "demo@shop" });
   });
 
-  it("honors enabledPlugins map and defaultEnabled", () => {
-    const activation = { enabledPlugins: { "keep@m": true, "off@m": false } };
-    expect(isPluginEnabled(activation, "keep@m", false)).toBe(true);
-    expect(isPluginEnabled(activation, "off@m", true)).toBe(false);
-    expect(isPluginEnabled(activation, "fresh@m", true)).toBe(true);
-    expect(isPluginEnabled(activation, "fresh@m", false)).toBe(false);
+  it("enables installed plugins unless explicitly false", () => {
+    const home = tmp();
+    const cwd = tmp();
+    mkdirSync(path.join(home, ".agents"), { recursive: true });
+    writeFileSync(
+      path.join(home, ".agents", "plugins.json"),
+      JSON.stringify({ enabledPlugins: { "keep@m": true, "off@m": false } }),
+    );
+    const activation = loadActivation({ home, cwd, env: process.env });
+    expect(isPluginEnabled(activation, "keep@m")).toBe(true);
+    expect(isPluginEnabled(activation, "off@m")).toBe(false);
+    expect(isPluginEnabled(activation, "fresh@m")).toBe(true);
+    expect(resolvePluginEnablement(activation, "fresh@m").source).toBe("default");
+    expect(resolvePluginEnablement(activation, "off@m")).toMatchObject({
+      enabled: false,
+      source: "user",
+    });
   });
 
-  it("loads project .agents/plugins.json over user", () => {
+  it("treats missing plugins.json as all enabled", () => {
+    const activation = loadActivation({ home: tmp(), cwd: tmp(), env: process.env });
+    expect(activation.user.exists).toBe(false);
+    expect(activation.project.exists).toBe(false);
+    expect(isPluginEnabled(activation, "anything@local")).toBe(true);
+    expect(resolvePluginEnablement(activation, "anything@local").source).toBe("default");
+  });
+
+  it("lets project .agents/plugins.json override user", () => {
     const home = tmp();
     const cwd = tmp();
     mkdirSync(path.join(home, ".agents"), { recursive: true });
@@ -82,8 +101,44 @@ describe("enablement", () => {
     );
     writeFileSync(path.join(cwd, ".agents", "plugins.json"), JSON.stringify({ enabledPlugins: { "b@m": false } }));
     const activation = loadActivation({ home, cwd, env: process.env });
-    expect(activation.enabledPlugins["a@m"]).toBe(true);
-    expect(activation.enabledPlugins["b@m"]).toBe(false);
+    expect(isPluginEnabled(activation, "a@m")).toBe(true);
+    expect(resolvePluginEnablement(activation, "a@m").source).toBe("user");
+    expect(isPluginEnabled(activation, "b@m")).toBe(false);
+    expect(resolvePluginEnablement(activation, "b@m")).toMatchObject({
+      enabled: false,
+      source: "project",
+    });
+  });
+
+  it("ignores Claude settings.json files", () => {
+    const home = tmp();
+    const cwd = tmp();
+    mkdirSync(path.join(home, ".claude"), { recursive: true });
+    mkdirSync(path.join(cwd, ".claude"), { recursive: true });
+    writeFileSync(
+      path.join(home, ".claude", "settings.json"),
+      JSON.stringify({ enabledPlugins: { "blocked@m": false } }),
+    );
+    writeFileSync(
+      path.join(cwd, ".claude", "settings.json"),
+      JSON.stringify({ enabledPlugins: { "blocked@m": false } }),
+    );
+    const activation = loadActivation({ home, cwd, env: process.env });
+    expect(isPluginEnabled(activation, "blocked@m")).toBe(true);
+    expect(resolvePluginEnablement(activation, "blocked@m").source).toBe("default");
+  });
+
+  it("setLayerEnabled writes only the targeted file and reports source", () => {
+    const home = tmp();
+    const cwd = tmp();
+    const paths = { home, cwd, env: process.env };
+    const userDecision = setLayerEnabled(paths, "x@m", false, "user");
+    expect(userDecision).toMatchObject({ enabled: false, source: "user" });
+    const projectDecision = setLayerEnabled(paths, "x@m", true, "project");
+    expect(projectDecision).toMatchObject({ enabled: true, source: "project" });
+    const activation = loadActivation(paths);
+    expect(activation.user.enabledPlugins["x@m"]).toBe(false);
+    expect(activation.project.enabledPlugins["x@m"]).toBe(true);
   });
 });
 
@@ -272,7 +327,6 @@ describe("discovery against Claude-compatible layout", () => {
     const store = path.join(home, ".agents", "plugins");
     const versionDir = path.join(store, "cache", "local", "fixture-demo", "1.0.0");
     mkdirSync(versionDir, { recursive: true });
-    mkdirSync(path.dirname(path.join(home, ".agents", "plugins.json")), { recursive: true });
     copyDir(fixtureRoot, versionDir);
     writeFileSync(
       path.join(store, "installed_plugins.json"),
@@ -291,14 +345,15 @@ describe("discovery against Claude-compatible layout", () => {
         },
       }),
     );
-    writeFileSync(
-      path.join(home, ".agents", "plugins.json"),
-      JSON.stringify({ enabledPlugins: { "fixture-demo@local": true } }),
-    );
 
     const discovered = discoverEnabledPlugins({ home, cwd, env: process.env });
     expect(discovered.enabled).toHaveLength(1);
     expect(discovered.enabled[0]?.skills[0]?.name).toBe("demo-skill");
+    expect(discovered.statuses[0]).toMatchObject({
+      id: "fixture-demo@local",
+      enabled: true,
+      source: "default",
+    });
   });
 
   it("skips disabled plugins", () => {
@@ -322,6 +377,11 @@ describe("discovery against Claude-compatible layout", () => {
     const discovered = discoverEnabledPlugins({ home, cwd, env: process.env });
     expect(discovered.enabled).toHaveLength(0);
     expect(discovered.skipped[0]?.reason).toBe("disabled");
+    expect(discovered.statuses[0]).toMatchObject({
+      enabled: false,
+      source: "user",
+      reason: "disabled",
+    });
   });
 });
 

@@ -1,7 +1,14 @@
 import path from "node:path";
 import { loadAgents, type LoadedAgent } from "./agents.js";
 import { loadCommands, type LoadedCommand } from "./commands.js";
-import { isPluginEnabled, loadActivation, parsePluginId, type PluginsActivation } from "./enablement.js";
+import {
+  isPluginEnabled,
+  loadActivation,
+  parsePluginId,
+  resolvePluginEnablement,
+  type EnablementDecision,
+  type PluginsActivation,
+} from "./enablement.js";
 import { type ExpandContext } from "./expand.js";
 import { loadHooks, type ClaudeHooksConfig } from "./hooks.js";
 import {
@@ -32,12 +39,23 @@ export type EnabledPlugin = {
   binDir?: string;
 };
 
+export type InstalledPluginStatus = {
+  id: string;
+  enabled: boolean;
+  source: EnablementDecision["source"];
+  sourceFile?: string;
+  sourceKey?: string;
+  reason?: string;
+  plugin?: EnabledPlugin;
+};
+
 export type DiscoveryResult = {
   paths: RuntimePaths;
   activation: PluginsActivation;
   installed: InstalledPluginRecord[];
   enabled: EnabledPlugin[];
   skipped: Array<{ id: string; reason: string }>;
+  statuses: InstalledPluginStatus[];
 };
 
 export function discoverEnabledPlugins(overrides: Partial<RuntimePaths> = {}): DiscoveryResult {
@@ -46,33 +64,47 @@ export function discoverEnabledPlugins(overrides: Partial<RuntimePaths> = {}): D
   const installed = loadInstalledPlugins(paths);
   const enabled: EnabledPlugin[] = [];
   const skipped: Array<{ id: string; reason: string }> = [];
+  const statuses: InstalledPluginStatus[] = [];
 
   for (const record of installed) {
+    const decision = resolvePluginEnablement(activation, record.id);
+    const statusBase = {
+      id: record.id,
+      source: decision.source,
+      sourceFile: decision.file,
+      sourceKey: decision.key,
+    };
     const install = pickInstallation(record, paths);
     if (!install) {
       skipped.push({ id: record.id, reason: "no installation entry" });
+      statuses.push({ ...statusBase, enabled: false, reason: "no installation entry" });
       continue;
     }
     const existing = resolveExistingInstallPath(record, install, paths);
     if (!existing) {
-      skipped.push({ id: record.id, reason: `installPath missing: ${install.installPath}` });
+      const reason = `installPath missing: ${install.installPath}`;
+      skipped.push({ id: record.id, reason });
+      statuses.push({ ...statusBase, enabled: false, reason });
       continue;
     }
     const pluginRoot = findPluginRoot(existing);
     if (!pluginRoot) {
       skipped.push({ id: record.id, reason: "could not find plugin root" });
+      statuses.push({ ...statusBase, enabled: false, reason: "could not find plugin root" });
       continue;
     }
     const loaded = loadManifestFromRoot(pluginRoot, record.name);
-    const defaultEnabled = loaded.manifest.defaultEnabled !== false;
-    if (!isPluginEnabled(activation, record.id, defaultEnabled)) {
+    if (!isPluginEnabled(activation, record.id)) {
       skipped.push({ id: record.id, reason: "disabled" });
+      statuses.push({ ...statusBase, enabled: false, reason: "disabled" });
       continue;
     }
-    enabled.push(hydratePlugin(record, loaded.manifest, pluginRoot, paths));
+    const plugin = hydratePlugin(record, loaded.manifest, pluginRoot, paths);
+    enabled.push(plugin);
+    statuses.push({ ...statusBase, enabled: true, plugin });
   }
 
-  return { paths, activation, installed, enabled, skipped };
+  return { paths, activation, installed, enabled, skipped, statuses };
 }
 
 export function loadPluginFromDirectory(

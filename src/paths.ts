@@ -74,11 +74,3 @@ export function versionedCachePath(
 ): string {
   return path.join(cacheDir(paths), marketplace, name, version);
 }
-
-export function claudeUserSettingsPath(paths: RuntimePaths): string {
-  return path.join(paths.home, ".claude", "settings.json");
-}
-
-export function claudeProjectSettingsPath(paths: RuntimePaths): string {
-  return path.join(paths.cwd, ".claude", "settings.json");
-}

@@ -1,11 +1,5 @@
-import { readJsonFile, writeJsonFile } from "./fs-utils.js";
-import {
-  claudeProjectSettingsPath,
-  claudeUserSettingsPath,
-  projectPluginsJsonPath,
-  type RuntimePaths,
-  userPluginsJsonPath,
-} from "./paths.js";
+import { isFile, readJsonFile, writeJsonFile } from "./fs-utils.js";
+import { projectPluginsJsonPath, type RuntimePaths, userPluginsJsonPath } from "./paths.js";
 
 export type ExtraKnownMarketplace = {
   source:
@@ -15,9 +9,28 @@ export type ExtraKnownMarketplace = {
     | { source: string; [key: string]: unknown };
 };
 
-export type PluginsActivation = {
+export type EnablementSource = "project" | "user" | "default";
+
+export type ActivationLayer = {
+  path: string;
+  exists: boolean;
   enabledPlugins: Record<string, boolean>;
   extraKnownMarketplaces?: Record<string, ExtraKnownMarketplace>;
+};
+
+export type PluginsActivation = {
+  user: ActivationLayer;
+  project: ActivationLayer;
+  /** Project keys override user keys. Missing keys are not listed. */
+  enabledPlugins: Record<string, boolean>;
+  extraKnownMarketplaces?: Record<string, ExtraKnownMarketplace>;
+};
+
+export type EnablementDecision = {
+  enabled: boolean;
+  source: EnablementSource;
+  key?: string;
+  file?: string;
 };
 
 export type PluginIdentifier = {
@@ -40,9 +53,12 @@ export function formatPluginId(name: string, marketplace?: string): string {
   return marketplace ? `${name}@${marketplace}` : name;
 }
 
-function readActivationFile(filePath: string): PluginsActivation {
-  const raw = readJsonFile<Partial<PluginsActivation> & Record<string, unknown>>(filePath);
-  if (!raw) return { enabledPlugins: {} };
+function readActivationLayer(filePath: string): ActivationLayer {
+  const exists = isFile(filePath);
+  const raw = exists ? readJsonFile<Partial<PluginsActivation> & Record<string, unknown>>(filePath) : undefined;
+  if (!raw) {
+    return { path: filePath, exists, enabledPlugins: {} };
+  }
   const enabled =
     raw.enabledPlugins && typeof raw.enabledPlugins === "object" && !Array.isArray(raw.enabledPlugins)
       ? { ...raw.enabledPlugins }
@@ -51,34 +67,27 @@ function readActivationFile(filePath: string): PluginsActivation {
     raw.extraKnownMarketplaces &&
     typeof raw.extraKnownMarketplaces === "object" &&
     !Array.isArray(raw.extraKnownMarketplaces)
-      ? raw.extraKnownMarketplaces
+      ? (raw.extraKnownMarketplaces as Record<string, ExtraKnownMarketplace>)
       : undefined;
-  return { enabledPlugins: enabled, extraKnownMarketplaces: extra };
+  return { path: filePath, exists, enabledPlugins: enabled, extraKnownMarketplaces: extra };
 }
 
 /**
- * Merge enablement: Claude writes `enabledPlugins` in settings.json.
- * We keep the same map in ~/.agents/plugins.json and optional project .agents/plugins.json.
- * Project keys override user keys. Agents files override Claude settings fallbacks.
+ * Only ~/.agents/plugins.json and <repo>/.agents/plugins.json are read.
+ * Project overrides user. Missing files or keys mean the plugin stays enabled.
  */
 export function loadActivation(paths: RuntimePaths): PluginsActivation {
-  const claudeUser = readActivationFile(claudeUserSettingsPath(paths));
-  const claudeProject = readActivationFile(claudeProjectSettingsPath(paths));
-  const user = readActivationFile(userPluginsJsonPath(paths));
-  const project = readActivationFile(projectPluginsJsonPath(paths));
-
+  const user = readActivationLayer(userPluginsJsonPath(paths));
+  const project = readActivationLayer(projectPluginsJsonPath(paths));
   const extraKnownMarketplaces = {
-    ...claudeUser.extraKnownMarketplaces,
     ...user.extraKnownMarketplaces,
-    ...claudeProject.extraKnownMarketplaces,
     ...project.extraKnownMarketplaces,
   };
-
   return {
+    user,
+    project,
     enabledPlugins: {
-      ...claudeUser.enabledPlugins,
       ...user.enabledPlugins,
-      ...claudeProject.enabledPlugins,
       ...project.enabledPlugins,
     },
     extraKnownMarketplaces: Object.keys(extraKnownMarketplaces).length
@@ -87,42 +96,104 @@ export function loadActivation(paths: RuntimePaths): PluginsActivation {
   };
 }
 
-export function saveUserActivation(paths: RuntimePaths, next: PluginsActivation): void {
-  writeJsonFile(userPluginsJsonPath(paths), next);
-}
-
-export function saveProjectActivation(paths: RuntimePaths, next: PluginsActivation): void {
-  writeJsonFile(projectPluginsJsonPath(paths), next);
-}
-
-export function isPluginEnabled(
-  activation: PluginsActivation,
-  pluginId: string,
-  defaultEnabled = true,
-): boolean {
+function matchingEnablementKey(map: Record<string, boolean>, pluginId: string): string | undefined {
+  if (pluginId in map) return pluginId;
   const parsed = parsePluginId(pluginId);
-  const map = activation.enabledPlugins;
-  if (pluginId in map) return map[pluginId] === true;
-  if (parsed.marketplace) {
-    const bare = map[parsed.name];
-    if (typeof bare === "boolean") return bare;
-  } else {
-    const prefixed = Object.entries(map).find(([key]) => parsePluginId(key).name === parsed.name);
-    if (prefixed) return prefixed[1] === true;
+  if (parsed.marketplace && parsed.name in map) return parsed.name;
+  if (!parsed.marketplace) {
+    const prefixed = Object.keys(map).find((key) => parsePluginId(key).name === parsed.name);
+    if (prefixed) return prefixed;
   }
-  return defaultEnabled;
+  return undefined;
 }
 
-export function setEnabled(
-  activation: PluginsActivation,
+/**
+ * Installed plugins are enabled unless some plugins.json sets the matching
+ * key to false. Project wins over user. Manifest defaultEnabled is ignored.
+ */
+export function resolvePluginEnablement(activation: PluginsActivation, pluginId: string): EnablementDecision {
+  const projectKey = matchingEnablementKey(activation.project.enabledPlugins, pluginId);
+  if (projectKey !== undefined) {
+    return {
+      enabled: activation.project.enabledPlugins[projectKey] !== false,
+      source: "project",
+      key: projectKey,
+      file: activation.project.path,
+    };
+  }
+  const userKey = matchingEnablementKey(activation.user.enabledPlugins, pluginId);
+  if (userKey !== undefined) {
+    return {
+      enabled: activation.user.enabledPlugins[userKey] !== false,
+      source: "user",
+      key: userKey,
+      file: activation.user.path,
+    };
+  }
+  return { enabled: true, source: "default" };
+}
+
+export function isPluginEnabled(activation: PluginsActivation, pluginId: string): boolean {
+  return resolvePluginEnablement(activation, pluginId).enabled;
+}
+
+function writeLayer(layer: ActivationLayer): void {
+  writeJsonFile(layer.path, {
+    enabledPlugins: layer.enabledPlugins,
+    ...(layer.extraKnownMarketplaces && Object.keys(layer.extraKnownMarketplaces).length
+      ? { extraKnownMarketplaces: layer.extraKnownMarketplaces }
+      : {}),
+  });
+}
+
+export function saveUserActivation(paths: RuntimePaths, next: Pick<ActivationLayer, "enabledPlugins" | "extraKnownMarketplaces">): void {
+  writeLayer({
+    path: userPluginsJsonPath(paths),
+    exists: true,
+    enabledPlugins: next.enabledPlugins,
+    extraKnownMarketplaces: next.extraKnownMarketplaces,
+  });
+}
+
+export function saveProjectActivation(
+  paths: RuntimePaths,
+  next: Pick<ActivationLayer, "enabledPlugins" | "extraKnownMarketplaces">,
+): void {
+  writeLayer({
+    path: projectPluginsJsonPath(paths),
+    exists: true,
+    enabledPlugins: next.enabledPlugins,
+    extraKnownMarketplaces: next.extraKnownMarketplaces,
+  });
+}
+
+export function setLayerEnabled(
+  paths: RuntimePaths,
   pluginId: string,
   enabled: boolean,
-): PluginsActivation {
-  return {
-    ...activation,
+  layer: "user" | "project",
+): EnablementDecision {
+  const activation = loadActivation(paths);
+  const target = layer === "project" ? activation.project : activation.user;
+  const next: ActivationLayer = {
+    ...target,
     enabledPlugins: {
-      ...activation.enabledPlugins,
+      ...target.enabledPlugins,
       [pluginId]: enabled,
     },
   };
+  writeLayer(next);
+  const refreshed = loadActivation(paths);
+  return resolvePluginEnablement(refreshed, pluginId);
+}
+
+export function setUserExtraMarketplaces(
+  paths: RuntimePaths,
+  extraKnownMarketplaces: Record<string, ExtraKnownMarketplace>,
+): void {
+  const activation = loadActivation(paths);
+  writeLayer({
+    ...activation.user,
+    extraKnownMarketplaces,
+  });
 }
