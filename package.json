@@ -29,6 +29,14 @@
     "prepare": "tsc -p tsconfig.json",
     "prepublishOnly": "npm run build && npm test"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/harnesstap/opencode-agent-plugin-support.git"
+  },
+  "homepage": "https://github.com/harnesstap/opencode-agent-plugin-support#readme",
+  "bugs": {
+    "url": "https://github.com/harnesstap/opencode-agent-plugin-support/issues"
+  },
   "keywords": [
     "opencode",
     "opencode-plugin",

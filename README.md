@@ -23,6 +23,8 @@ Local checkout:
 
 Restart OpenCode after installing. npm plugins are installed by OpenCode into `~/.cache/opencode/node_modules/`.
 
+Source: [github.com/harnesstap/opencode-agent-plugin-support](https://github.com/harnesstap/opencode-agent-plugin-support). Issues: [github.com/harnesstap/opencode-agent-plugin-support/issues](https://github.com/harnesstap/opencode-agent-plugin-support/issues).
+
 ## Storage layout (Claude-compatible)
 
 Activation is **only** read from:
