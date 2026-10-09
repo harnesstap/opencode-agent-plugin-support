@@ -140,23 +140,27 @@ export type HookMappingNote = {
 };
 
 export const HOOK_MAPPING_TABLE: HookMappingNote[] = [
-  { event: "PreToolUse", mappedTo: "tool.execute.before + permission.ask" },
-  { event: "PostToolUse", mappedTo: "tool.execute.after" },
+  { event: "PreToolUse", mappedTo: "V1 tool.execute.before + permission.ask; V2 ctx.tool.hook(execute.before)" },
+  { event: "PostToolUse", mappedTo: "V1 tool.execute.after; V2 ctx.tool.hook(execute.after)" },
   {
     event: "PostToolUseFailure",
-    mappedTo: "tool.execute.after (heuristic)",
+    mappedTo: "tool.execute.after (heuristic / V2 status=error)",
     notes: "OpenCode does not expose a dedicated failure hook; we treat empty/error-like output as failure.",
   },
-  { event: "UserPromptSubmit", mappedTo: "chat.message" },
-  { event: "SessionStart", mappedTo: "event session.created (and first chat.message fallback)" },
-  { event: "SessionEnd", mappedTo: "event session.deleted" },
+  { event: "UserPromptSubmit", mappedTo: "V1 chat.message; V2 ctx.session.hook(prompt)" },
+  {
+    event: "SessionStart",
+    mappedTo: "V1 event session.created; V2 ctx.session.hook(context) + event subscribe",
+    notes: "Matcher is the session source (startup/clear/compact), not a tool name. V2 re-injects context on every model call.",
+  },
+  { event: "SessionEnd", mappedTo: "V1 event session.deleted; V2 event subscribe session.deleted" },
   {
     event: "Stop",
-    mappedTo: "event session.idle",
+    mappedTo: "V1 event session.idle; V2 event subscribe session.idle",
     notes: "Approximation: OpenCode idle is not identical to Claude's turn-complete Stop.",
   },
-  { event: "PermissionRequest", mappedTo: "permission.ask" },
-  { event: "PreCompact", mappedTo: "experimental.session.compacting" },
+  { event: "PermissionRequest", mappedTo: "V1 permission.ask; V2 ctx.permission.hook(evaluate)" },
+  { event: "PreCompact", mappedTo: "V1 experimental.session.compacting; V2 ctx.session.hook(compaction)" },
   ...UNMAPPED_HOOK_EVENTS.map((event) => ({
     event,
     mappedTo: "(unmapped)",

@@ -1,10 +1,65 @@
 # opencode-claude-plugins
 
-An OpenCode plugin that loads **Claude Code plugins** and exposes them as ordinary OpenCode resources: skills, slash commands, subagents, MCP servers, instructions, and lifecycle hooks.
+Loads **Claude Code plugins** into OpenCode as native skills, slash commands, subagents, MCP servers, instructions, and lifecycle hooks. Plugin files stay where they are; nothing is copied into `.opencode/` or `~/.agents/skills`.
 
-Nothing is copied into `.opencode/` or `~/.agents/skills`. Components stay in the Claude plugin directory and are injected at runtime through OpenCode’s plugin `config` hook (`command`, `agent`, `mcp`, `instructions`, `skills.paths`).
+**OpenCode v2 is the primary target.** A v1 `server()` export remains for OpenCode 1.18.29+. v2 does not run v1 plugin implementations.
 
 ## Install
+
+### OpenCode v2 (2.0+)
+
+Use the `plugins` key (not `plugin`):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": ["opencode-claude-plugins"]
+}
+```
+
+Restart OpenCode (`opencode service restart` if the background service is running). npm plugins land in OpenCode’s package cache.
+
+### Local checkout (v2)
+
+v2 only loads `index.js` / `index.ts` or `server.js` / `server.ts` **at the folder root**. It ignores `package.json` `"main"`, and a path to a file is rejected (`configured plugin path must be a directory`).
+
+```bash
+git clone https://github.com/harnesstap/opencode-agent-plugin-support.git
+cd opencode-agent-plugin-support
+npm install
+npm run build
+```
+
+```json
+{
+  "plugins": ["/absolute/path/to/opencode-claude-plugins"]
+}
+```
+
+Do **not** point `plugins` at `dist/index.js` or `src/index.ts`.
+
+Options (object form):
+
+```json
+{
+  "plugins": [
+    {
+      "package": "opencode-claude-plugins",
+      "options": {
+        "extraPluginDirs": { "my-plugin@local": "/path/to/claude-plugin" },
+        "skipInstalled": false,
+        "mcpDisabled": false
+      }
+    }
+  ]
+}
+```
+
+`extraPluginDirs` loads extra Claude plugin trees without writing a registry. `skipInstalled` skips `~/.agents/plugins/installed_plugins.json`.
+
+On OpenCode **2.0.24**, a local `{ "package": "/abs/path", "options": { … } }` entry is collapsed to the directory string and **options are dropped**. Prefer `install-local` (or `~/.agents/plugins/installed_plugins.json`) for Claude plugins, and list this package as a directory/`opencode-claude-plugins` spec. Options on a published npm plugin were not re-tested on that build.
+
+### OpenCode v1
 
 ```json
 {
@@ -13,43 +68,9 @@ Nothing is copied into `.opencode/` or `~/.agents/skills`. Components stay in th
 }
 ```
 
-Local checkout:
+Needs OpenCode **1.18.29+** (object entrypoint with `server()`). Older v1 hosts expected a default function export.
 
-```json
-{
-  "plugin": ["file:///absolute/path/to/opencode-claude-plugins"]
-}
-```
-
-Restart OpenCode after installing. npm plugins are installed by OpenCode into `~/.cache/opencode/node_modules/`.
-
-Source: [github.com/harnesstap/opencode-agent-plugin-support](https://github.com/harnesstap/opencode-agent-plugin-support). Issues: [github.com/harnesstap/opencode-agent-plugin-support/issues](https://github.com/harnesstap/opencode-agent-plugin-support/issues).
-
-## Storage layout (Claude-compatible)
-
-Activation is **only** read from:
-
-| File | Role |
-| --- | --- |
-| `~/.agents/plugins.json` | User-level `enabledPlugins` + `extraKnownMarketplaces` |
-| `<repo>/.agents/plugins.json` | Project-level overlay (same schema). Overrides user keys |
-
-Claude’s `~/.claude/settings.json` and `<repo>/.claude/settings.json` are **not** read.
-
-Everything else is under `~/.agents/plugins/`, matching `~/.claude/plugins/`:
-
-```text
-~/.agents/plugins/
-  installed_plugins.json      # v1 object, v2 { version: 2, plugins: { "name@market": [entries] } }, or v3 array
-  known_marketplaces.json
-  marketplaces/<name>/
-  cache/<marketplace>/<plugin>/<version>/
-  data/<plugin-id>/           # ${CLAUDE_PLUGIN_DATA}
-```
-
-Each install entry’s `installPath` is used as-is (with `~` / `$HOME` expanded). If that directory is missing, the versioned cache path above is tried.
-
-### Symlink trick
+### Share Claude Code’s plugin cache
 
 If you already install plugins with Claude Code:
 
@@ -58,19 +79,39 @@ mkdir -p ~/.agents
 ln -s ~/.claude/plugins ~/.agents/plugins
 ```
 
-That shares the install cache. Enablement is separate: copy the `enabledPlugins` map into `~/.agents/plugins.json` if you want the same on/off state, or omit the file and every installed plugin stays on.
+That reuses the **install tree**. Enablement is separate (`~/.agents/plugins.json`); omit that file and every installed plugin stays on.
+
+`install-local` **refuses** to write through that symlink unless you pass `--write-claude-registry`. A dedicated `~/.agents/plugins` directory is safer if you do not want this CLI touching Claude’s `installed_plugins.json`.
+
+## Where plugins live
+
+Installed plugins live under `~/.agents/plugins/` — the same layout as `~/.claude/plugins/`:
+
+```text
+~/.agents/plugins/
+  installed_plugins.json
+  known_marketplaces.json
+  marketplaces/<name>/
+  cache/<marketplace>/<plugin>/<version>/
+  data/<plugin-id>/
+```
+
+`installPath` from `installed_plugins.json` is used as-is (`~` / `$HOME` expanded). Relative paths are resolved from `~/.agents/plugins/` (so `cache/...` works). If that directory is missing, the versioned cache path is tried.
+
+Project-scoped installs for **other** repos are ignored. If several entries remain, the one whose directory exists wins.
 
 ### Enablement
 
-Every plugin listed in `installed_plugins.json` with a resolvable `installPath` is **enabled** unless `enabledPlugins` sets it to `false`.
+Activation is read only from:
 
-- Missing `plugins.json` → all installed plugins enabled (`source: "default"`).
-- Missing key → enabled (`source: "default"`).
-- `"id": true` or `"id": false` in the user file → `source: "user"`.
-- Same keys in the project file override the user file → `source: "project"`.
-- Manifest `defaultEnabled` is ignored.
+| File | Role |
+| --- | --- |
+| `~/.agents/plugins.json` | User-level `enabledPlugins` |
+| `<repo>/.agents/plugins.json` | Project overlay; keys override the user file |
 
-`plugins.json` shape:
+Claude’s `~/.claude/settings.json` is not read.
+
+Every plugin in `installed_plugins.json` with a resolvable path is **enabled** unless `enabledPlugins` sets it to `false`. Missing file or missing key → enabled. Project keys override user keys. Manifest `defaultEnabled` is ignored.
 
 ```json
 {
@@ -85,55 +126,6 @@ Every plugin listed in `installed_plugins.json` with a resolvable `installPath` 
 }
 ```
 
-`opencode-claude-plugins list` prints each installed plugin’s effective `enabled` flag and `source` (`default` | `user` | `project`). `enable` / `disable` write only the targeted file (`--project` for the repo file) and echo the effective state.
-
-## How injection works
-
-OpenCode plugins cannot drop files into the skill scanner without either copying or telling config about extra paths. The `config` hook runs at plugin init and mutates the live config object OpenCode already holds:
-
-| Claude component | OpenCode field | Why this and not copies |
-| --- | --- | --- |
-| `skills/*/SKILL.md` | `config.skills.paths` | Same discovery as `.agents/skills`: OpenCode recursively finds `SKILL.md`. Path points at the plugin tree. |
-| `commands/*.md` | `config.command["plugin:name"]` | Native slash commands, including `$ARGUMENTS`. |
-| `agents/*.md` | `config.agent["plugin:name"]` | Native subagents (`mode: "subagent"`). |
-| `.mcp.json` / `mcpServers` | `config.mcp["plugin:name"]` | Native MCP entries (`type: local \| remote`). |
-| `CLAUDE.md` / `AGENTS.md` / `INSTRUCTIONS.md` | `config.instructions` + `experimental.chat.system.transform` | File paths for the instructions loader, plus inlined text so content still applies if files are not re-read after the hook. |
-| `hooks/hooks.json` | mapped plugin hooks | Executed as Claude command hooks (stdin JSON, exit codes). |
-| `bin/` | `shell.env` `PATH` | Prepended while the plugin is enabled. |
-
-Skill **names** stay the `SKILL.md` folder names. OpenCode skill ids cannot contain `:`, so they are not namespaced as `plugin:skill`. Commands, agents, and MCP servers **are** namespaced as `plugin:component`, matching Claude.
-
-## Feature mapping
-
-| Claude | OpenCode | Notes |
-| --- | --- | --- |
-| Skills | `skills.paths` | Frontmatter `name` + `description` required by OpenCode. |
-| MCP | `mcp` | `${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_PLUGIN_DATA}`, `${CLAUDE_PROJECT_DIR}`, and `$ENV` expanded. stdio → `type: "local"`; `url`/`http`/`sse`/`ws` → `type: "remote"`. `.mcpb` bundles are not unpacked. |
-| Commands | `command` | Markdown + inline `plugin.json` maps. `$ARGUMENTS` preserved (OpenCode already substitutes it). |
-| Instructions | `instructions` + system prompt | Claude itself does **not** load plugin-root `CLAUDE.md`; we still do because it is the natural mapping. |
-| Agents | `agent` | `description`, `tools` / `disallowedTools` → OpenCode `tools` booleans, `model` aliases (`haiku` / `sonnet` / `opus`) or `provider/model`. Plugin-agent `hooks` / `mcpServers` / `permissionMode` ignored (Claude ignores those on plugin agents too). |
-| Hooks | see below | Command hooks only (`type: "command"`). HTTP, prompt, MCP, and agent hooks are not run. |
-
-### Hook mapping
-
-| Claude event | OpenCode hook | Fidelity |
-| --- | --- | --- |
-| `PreToolUse` | `tool.execute.before`, `permission.ask` | High. Exit `2` or JSON `permissionDecision: "deny"` / `decision: "block"` throws / denies. `updatedInput` merges into tool args. |
-| `PostToolUse` | `tool.execute.after` | High. `additionalContext` appended to tool output. |
-| `PostToolUseFailure` | `tool.execute.after` (heuristic) | Medium. Empty or error-like output. |
-| `UserPromptSubmit` | `chat.message` | Medium. `additionalContext` appended as a text part. Block replaces the prompt text (OpenCode has no first-class reject). |
-| `SessionStart` | `event` `session.created`, first `chat.message` | Medium. Context queued into `experimental.chat.system.transform`. |
-| `SessionEnd` | `event` `session.deleted` | Medium. |
-| `Stop` | `event` `session.idle` | Low. Idle ≠ Claude turn-complete Stop. |
-| `PermissionRequest` | `permission.ask` | Medium. |
-| `PreCompact` | `experimental.session.compacting` | Medium. Context strings only. |
-
-Unmapped (not executed): `Setup`, `UserPromptExpansion`, `PermissionDenied`, `PostToolBatch`, `Notification`, `MessageDisplay`, `SubagentStart`, `SubagentStop`, `TaskCreated`, `TaskCompleted`, `StopFailure`, `TeammateIdle`, `InstructionsLoaded`, `ConfigChange`, `CwdChanged`, `DirectoryAdded`, `FileChanged`, `WorktreeCreate`, `WorktreeRemove`, `PostCompact`, `PreModelSwitch`, `PostModelSwitch`, `Elicitation`, `ElicitationResult`.
-
-Tool matchers (`Bash`, `Write|Edit`) run against **Claude** names. OpenCode `bash` / `edit` / `write` / `read` / `glob` / `grep` / `list` / `webfetch` / `websearch` / `task` / `todowrite` / `skill` are translated first.
-
-Hook processes receive Claude-style stdin JSON (`hook_event_name`, `session_id`, `cwd`, `tool_name`, `tool_input`, …) and `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PLUGIN_DATA` / `CLAUDE_PROJECT_DIR` in the environment.
-
 ## CLI
 
 ```bash
@@ -141,33 +133,39 @@ npx opencode-claude-plugins list
 npx opencode-claude-plugins enable name@marketplace
 npx opencode-claude-plugins disable name@marketplace --project
 npx opencode-claude-plugins install-local ./my-claude-plugin [name@local]
+npx opencode-claude-plugins install-local ./my-claude-plugin --write-claude-registry
 npx opencode-claude-plugins marketplace-add my-market github:org/repo
 ```
 
-`install-local` writes `installed_plugins.json` (v2). The plugin is enabled by default until you `disable` it. It does not clone git marketplaces.
+- `list` — installed plugins, effective on/off, and source (`default` | `user` | `project`).
+- `enable` / `disable` — write the user file, or `--project` for the repo file.
+- `install-local` — register a local directory (enabled until you disable it). Does not clone git marketplaces. Refuses to overwrite Claude’s registry via a `~/.agents/plugins` → `~/.claude/plugins` symlink unless `--write-claude-registry` is set.
+- `marketplace-add` — record an extra marketplace (`github:org/repo` or a path).
 
-## Develop
+## Support
 
-```bash
-npm install
-npm test
-npm run build
-```
+| Claude | OpenCode v2 | OpenCode v1 | Notes |
+| --- | --- | --- | --- |
+| Skills | `ctx.skill.transform` | `config.skills.paths` | Folder names as skill names. OpenCode requires kebab-case `name` + `description` in `SKILL.md`. Overlapping manifest `skills` paths and `skills/` are deduped. |
+| MCP | `ctx.mcp.transform` (`disabled`) | `config.mcp` (`enabled`) | `${CLAUDE_PLUGIN_ROOT}` / `_DATA` / `_PROJECT_DIR` / `$ENV` expanded. stdio → local; `url` / `http` / `sse` / `ws` → remote. |
+| Commands | `ctx.command.transform` | `config.command` | Namespaced `plugin:command`. `$ARGUMENTS` works. |
+| Instructions | re-injected on every `session.context` | `config.instructions` + system transform | Plugin-root `CLAUDE.md` / `AGENTS.md` / `INSTRUCTIONS.md`. v2 context is per model call and is not persisted. |
+| Agents | `ctx.agent.transform` `update()` (inserts if missing) | `config.agent` | Namespaced `plugin:agent`, `mode: "subagent"`. No files copied into user dirs. v2 tool allowlists are not 1:1 with Claude `tools:`. |
+| Hooks | tool / session / permission / event subscribe | v1 hook object | Command hooks (`type: "command"`) only. See table below. |
 
-## What we verified
+**Hooks wired on v2:** PreToolUse (block + `updatedInput`), PostToolUse / PostToolUseFailure (`additionalContext`), UserPromptSubmit, SessionStart (matcher = `startup` / `clear` / `compact`, re-added every model call), SessionEnd, Stop (`session.idle`), PermissionRequest (`permission.evaluate`), PreCompact (`session.compaction`).
 
-- Unit tests: manifest/path containment, enablement merge, installed_plugins v1/v2/v3, frontmatter, env expansion, tool-name mapping, hook JSON / exit code 2, fixture component load, config injection.
-- Integration: a fixture Claude plugin (skill, MCP, command, agent, instructions, hooks) is discovered from a fake `~/.agents/plugins` tree and injected so OpenCode config contains each resource.
-- Full `opencode` TUI smoke: see `test/smoke.md`. This environment may not have a logged-in OpenCode binary; run the documented command locally if you need a live session.
+**Not loaded:** LSP, output styles, themes, monitors, workflows, in-process JS mods, `.mcpb` bundles, HTTP/prompt/MCP/agent hooks, and most other Claude hook events.
 
-## Limitations
+**Also:**
 
-- Skills cannot be `plugin:name` because OpenCode’s skill name regex is kebab-case only.
-- `config.skills.paths` is the supported injection API; if an older OpenCode build scans skills **before** plugin config hooks, skills will not appear until that order is fixed upstream. Commands/agents/MCP from the same hook still apply.
-- Marketplace install/update (`claude plugin install`) is not a full clone implementation; register local dirs or reuse Claude’s cache via the symlink.
-- LSP, output styles, themes, monitors, workflows, mods (in-process JS hooks), and `.mcpb` bundles are not loaded.
-- `${user_config.*}` is expanded only when values are passed in; this plugin does not implement Claude’s `/config` UI.
+- Skills cannot be namespaced as `plugin:name` (OpenCode skill names are kebab-case only). Commands, agents, and MCP **are** namespaced as `plugin:component`.
+- v2 built-in tool ids `shell`, `patch`, and `subagent` map to Claude `Bash`, `Edit`, and `Task` for hook matchers. Plugin MCP tools like `fixture-demo_echo-api_echo` map to `mcp__plugin_fixture-demo_echo-api__echo`.
+- `${user_config.*}` is expanded only if values are supplied; there is no Claude `/config` UI.
+- On v1 builds that scan skills before plugin config hooks, skills may not appear until that order is fixed upstream.
 
 ## License
 
 MIT
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for how injection works, and [CONTRIBUTING.md](CONTRIBUTING.md) for development.

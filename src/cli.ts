@@ -7,6 +7,7 @@ import {
   setUserExtraMarketplaces,
 } from "./enablement.js";
 import { defaultRuntimePaths } from "./paths.js";
+import { CLAUDE_REGISTRY_WRITE_HELP, writesThroughClaudePluginRegistry } from "./registry-guard.js";
 import { saveKnownMarketplace, upsertInstallation } from "./registry-write.js";
 import { findPluginRoot, loadManifestFromRoot } from "./manifest.js";
 
@@ -17,7 +18,8 @@ Commands:
   list                         Show installed plugins with effective enablement and source
   enable <id> [--project]      Set enabledPlugins[id]=true (user or project file)
   disable <id> [--project]     Set enabledPlugins[id]=false (user or project file)
-  install-local <dir> [id]     Register a local plugin directory
+  install-local <dir> [id] [--write-claude-registry]
+                               Register a local plugin directory
   marketplace-add <name> <src> Record an extra marketplace (github:org/repo or path)
 `;
 }
@@ -87,15 +89,20 @@ function main(argv: string[]): number {
       return 0;
     }
     case "install-local": {
-      const dir = rest[0];
+      const positional = rest.filter((arg) => !arg.startsWith("-"));
+      const dir = positional[0];
       if (!dir) {
         process.stderr.write("missing directory\n");
+        return 1;
+      }
+      if (writesThroughClaudePluginRegistry(paths) && !rest.includes("--write-claude-registry")) {
+        process.stderr.write(`${CLAUDE_REGISTRY_WRITE_HELP}\n`);
         return 1;
       }
       const abs = path.resolve(dir);
       const root = findPluginRoot(abs) ?? abs;
       const loaded = loadManifestFromRoot(root, path.basename(root));
-      const id = rest[1] ?? `${loaded.manifest.name}@local`;
+      const id = positional[1] ?? `${loaded.manifest.name}@local`;
       upsertInstallation(paths, id, loaded.manifest.name, "local", {
         scope: "user",
         installPath: root,

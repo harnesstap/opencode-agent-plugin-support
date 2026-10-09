@@ -42,6 +42,10 @@ const PRIMARY_CLAUDE_TOOLS: Record<string, string> = {
   apply_patch: "ApplyPatch",
   lsp: "LSP",
   question: "Question",
+  // OpenCode V2 built-in tool ids
+  shell: "Bash",
+  subagent: "Task",
+  patch: "Edit",
 };
 
 export const OPENCODE_TO_CLAUDE_TOOLS: Record<string, string> = {
@@ -58,8 +62,29 @@ export function toOpenCodeTool(name: string): string {
   return name.toLowerCase();
 }
 
-export function toClaudeTool(name: string): string {
+/**
+ * Claude Code plugin MCP tools are `mcp__plugin_<plugin>_<server>__<tool>`.
+ * OpenCode V2 names the same call `plugin_server_tool` (colon → underscore).
+ */
+export function toClaudeMcpTool(opencodeTool: string, mcpServerIds: Iterable<string> = []): string | undefined {
+  const servers = [...mcpServerIds]
+    .map((id) => ({ original: id, v2: id.replaceAll(":", "_") }))
+    .sort((a, b) => b.v2.length - a.v2.length);
+  for (const server of servers) {
+    const prefix = `${server.v2}_`;
+    if (!opencodeTool.startsWith(prefix)) continue;
+    const tool = opencodeTool.slice(prefix.length);
+    if (!tool) continue;
+    const pluginAndServer = server.original.replaceAll(":", "_");
+    return `mcp__plugin_${pluginAndServer}__${tool}`;
+  }
+  return undefined;
+}
+
+export function toClaudeTool(name: string, mcpServerIds: Iterable<string> = []): string {
   if (OPENCODE_TO_CLAUDE_TOOLS[name]) return OPENCODE_TO_CLAUDE_TOOLS[name]!;
+  const fromKnownMcp = toClaudeMcpTool(name, mcpServerIds);
+  if (fromKnownMcp) return fromKnownMcp;
   const mcp = name.match(/^([a-zA-Z0-9:-]+)_(.+)$/);
   if (mcp) return `mcp__${mcp[1]}__${mcp[2]}`;
   const titled = name.charAt(0).toUpperCase() + name.slice(1);

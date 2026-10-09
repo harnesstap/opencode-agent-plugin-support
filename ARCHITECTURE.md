@@ -1,0 +1,121 @@
+# Architecture
+
+Runtime bridge: Claude Code plugin trees stay on disk under `~/.agents/plugins/` (same layout as `~/.claude/plugins/`). This package never copies components into `.opencode/` or `~/.agents/skills`.
+
+OpenCode **v2** is the primary host. The default export is `{ id, setup, server }`:
+
+- v2 reads `id` + `setup(ctx)` and ignores `server()`. There is no `config` hook; plugins register through domain `transform` / `hook` APIs.
+- v1 (1.18.29+) calls `server()`, which is the original function plugin (`createClaudeCodeBridge`).
+
+A root `index.js` re-exports `./dist/index.js` so a **directory** path in v2 `plugins` loads (v2 does not honor `package.json` `"main"` for local folders, and rejects file paths).
+
+## Discovery
+
+1. Read activation from `~/.agents/plugins.json` and `<cwd>/.agents/plugins.json` only. Project `enabledPlugins` keys override user keys. Missing file/key → enabled. Manifest `defaultEnabled` is ignored.
+2. Parse `~/.agents/plugins/installed_plugins.json` (see versions below). Optional v2/v1 plugin option `skipInstalled` skips this.
+3. For each record, pick an installation:
+   - Drop `project` / `local` entries whose `projectPath` is a different cwd.
+   - Rank remaining: matching-cwd `local` / `project`, then other `local` / `project` without a foreign path, then `user`, `managed`.
+   - Prefer the best-ranked entry whose directory exists.
+4. Resolve `installPath` (`~` / `$HOME` expanded). Relative paths are resolved from `~/.agents/plugins/` (not `$HOME`), so Claude’s `cache/...` values work. If that directory is missing, try `cache/<marketplace>/<name>/<version>/`.
+5. Find the plugin root (directory containing `.claude-plugin/plugin.json` or equivalent), load the manifest, hydrate skills / commands / agents / MCP / instructions / hooks.
+6. Plugin option `extraPluginDirs` (`{ id: "/abs/path" }`) appends more trees without a registry write.
+
+`${CLAUDE_PLUGIN_DATA}` maps to `~/.agents/plugins/data/<slug>/`. Plugin `bin/` is prepended onto `PATH` (v1 `shell.env`, v2 `ctx.shell.hook("create.before")`) while the plugin is enabled.
+
+Duplicate `SKILL.md` paths (manifest `skills` overlapping default `skills/`) are skipped.
+
+## Config injection
+
+### v2 (`setup`)
+
+v2 has no mutable global config object.
+
+| Claude component | v2 API | Behavior |
+| --- | --- | --- |
+| `skills/*/SKILL.md` | `ctx.skill.transform` `editor.add` | `{ id, name, description?, path, content }`. Not namespaced (kebab-case only). |
+| `commands/*.md` | `ctx.command.transform` `editor.add` | Native slash commands. Executor substitutes `$ARGUMENTS` and calls `ctx.session.prompt`. |
+| `agents/*.md` | `ctx.agent.transform` | See **Agents** below. |
+| `.mcp.json` / `mcpServers` | `ctx.mcp.transform` `editor.set` | Native MCP. v2 field is `disabled` (not `enabled`). |
+| `CLAUDE.md` / … | `ctx.session.hook("context")` | Push instruction texts onto `event.system` **every** model call (v2 context is not persisted). |
+| `hooks/hooks.json` | session / tool / permission hooks + `ctx.event.subscribe` | Command hooks only. |
+| `bin/` | `ctx.shell.hook("create.before")` | Prepend `PATH`. |
+
+### v1 (`config` hook)
+
+The `config` hook runs at plugin init and mutates the live config object:
+
+| Claude component | OpenCode field | Behavior |
+| --- | --- | --- |
+| `skills/*/SKILL.md` | `config.skills.paths` (or `config.skills` if it is already a string array) | Same discovery as `.agents/skills`. |
+| `commands/*.md` | `config.command["plugin:name"]` | Native slash commands. |
+| `agents/*.md` | `config.agent["plugin:name"]` | `mode: "subagent"`. |
+| `.mcp.json` / `mcpServers` | `config.mcp["plugin:name"]` | Native MCP (`type: local \| remote`, `enabled`). |
+| `CLAUDE.md` / … | `config.instructions` + `experimental.chat.system.transform` | File paths plus inlined text. |
+| `hooks/hooks.json` | mapped plugin hooks | Command hooks only. |
+| `bin/` | `shell.env` `PATH` | Prepended while enabled. |
+
+Skill **names** stay the `SKILL.md` folder names. OpenCode skill ids cannot contain `:`, so they are not namespaced as `plugin:skill`. Commands, agents, and MCP servers **are** namespaced as `plugin:component`.
+
+### Component mapping details
+
+- **Skills:** Frontmatter `name` + `description` are required by OpenCode. Search roots: `skills/`, manifest `skills` paths, or a root-level `SKILL.md`.
+- **MCP:** `${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_PLUGIN_DATA}`, `${CLAUDE_PROJECT_DIR}`, and `$ENV` expanded. stdio / `command` → `type: "local"`; `url` / `http` / `sse` / `ws` → `type: "remote"`. `.mcpb` bundles are not unpacked. `${user_config.*}` expands only when `userConfig` is passed in.
+- **Commands:** Markdown files plus inline `plugin.json` maps. `$ARGUMENTS` is preserved.
+- **Instructions:** Claude itself does **not** load plugin-root `CLAUDE.md`; we still do because it is the natural OpenCode mapping.
+- **Agents (v1):** `description`; `tools` / `disallowedTools` → OpenCode `tools` booleans; `model` aliases (`haiku` / `sonnet` / `opus`) or `provider/model`. Plugin-agent `hooks` / `mcpServers` / `permissionMode` ignored.
+
+### Agents on v2
+
+Published plugin docs expose `AgentEditor` as `list` / `get` / `default` / `update` / `remove` (no `add` on OpenCode 2.0.24). Upstream `packages/core/src/agent.ts` implements `update` as **insert-on-miss** (`Info.empty(id)` then the callback). That is the legitimate way to register Claude plugin subagents without copying markdown into `~/.config/opencode` or `.opencode/`.
+
+If a future host adds `editor.add`, we call it first and fall back to `update`.
+
+`Agent.Info` uses `system` (not `prompt`) and `permissions` (not v1 `tools` booleans). We set `mode: "subagent"`, `hidden: false`, `system` from the agent markdown, optional `{ providerID, id }` model. Claude tool allowlists are not rewritten into v2 permission rulesets (lossy; would be a silent policy change).
+
+We do **not** copy agent files into user directories.
+
+## Hook execution
+
+Only `type: "command"` hooks run (HTTP, prompt, MCP, and agent hooks are skipped). Matchers (`Bash`, `Write|Edit`) are compared against **Claude** tool names. OpenCode v1 `bash` / `edit` / `write` and v2 `shell` / `patch` / `subagent` (and related) are translated first.
+
+Plugin MCP tool ids on v2 look like `fixture-demo_echo-api_echo` and map to Claude `mcp__plugin_fixture-demo_echo-api__echo` when the namespaced server `fixture-demo:echo-api` is known.
+
+**SessionStart / SessionEnd / PreCompact** matchers are session sources (`startup`, `clear`, `auto` / `manual`), not tool names. Passing no matcher name still skips groups that declare a matcher.
+
+Processes get Claude-style stdin JSON (`hook_event_name`, `session_id`, `cwd`, `tool_name`, `tool_input`, …) and `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PLUGIN_DATA` / `CLAUDE_PROJECT_DIR` in the environment. Timeout defaults to 30s (`hooks.json` `timeout` is seconds). If `args` is empty, the command string is run via the shell.
+
+Stdout is parsed as JSON when possible (`hookSpecificOutput`, `decision`, `additionalContext`, `updatedInput`, `continue`). Interpretation:
+
+- Exit `2`, `permissionDecision: "deny"`, `decision: "block"`, or `continue: false` → block.
+- `updatedInput` merges into tool args (PreToolUse).
+- `additionalContext` is appended to tool output, prompt text, or compacting context depending on the event.
+- PostToolUse vs PostToolUseFailure: v1 uses empty/error-like output; v2 uses `event.status === "error"`.
+
+UserPromptSubmit block replaces the prompt text (OpenCode has no first-class reject). SessionStart context is cached per session and re-injected on every v2 `context` hook (and queued into v1 `experimental.chat.system.transform`).
+
+### Event mapping
+
+| Claude event | v2 | v1 |
+| --- | --- | --- |
+| `PreToolUse` | `ctx.tool.hook("execute.before")` | `tool.execute.before`, `permission.ask` |
+| `PostToolUse` | `ctx.tool.hook("execute.after")` | `tool.execute.after` |
+| `PostToolUseFailure` | `execute.after` when `status === "error"` | `tool.execute.after` (heuristic) |
+| `UserPromptSubmit` | `ctx.session.hook("prompt")` | `chat.message` |
+| `SessionStart` | `ctx.session.hook("context")` + `session.created` events; matcher `startup` | `event` `session.created`, first `chat.message` |
+| `SessionEnd` | `ctx.event.subscribe` `session.deleted` / `session.removed`; matcher `clear` | `event` `session.deleted` |
+| `Stop` | `session.idle` events | `event` `session.idle` |
+| `PermissionRequest` | `ctx.permission.hook("evaluate")` | `permission.ask` |
+| `PreCompact` | `ctx.session.hook("compaction")`; matcher `auto` / `manual` | `experimental.session.compacting` |
+
+Unmapped (not executed): `Setup`, `UserPromptExpansion`, `PermissionDenied`, `PostToolBatch`, `Notification`, `MessageDisplay`, `SubagentStart`, `SubagentStop`, `TaskCreated`, `TaskCompleted`, `StopFailure`, `TeammateIdle`, `InstructionsLoaded`, `ConfigChange`, `CwdChanged`, `DirectoryAdded`, `FileChanged`, `WorktreeCreate`, `WorktreeRemove`, `PostCompact`, `PreModelSwitch`, `PostModelSwitch`, `Elicitation`, `ElicitationResult`.
+
+## `installed_plugins.json` versions
+
+Readers accept:
+
+- **v1** object: `{ plugins: { "name@market": { installPath, … } } }`
+- **v2** object: `{ version: 2, plugins: { "name@market": [entries] } }`
+- **v3** array of entries (`id` / `plugin` / `name`+`marketplace` plus install fields)
+
+`install-local` always writes **v2**. It refuses when `~/.agents/plugins` is Claude’s store (symlink / same realpath as `~/.claude/plugins`) unless `--write-claude-registry`. Multiple installations per id are kept; `pickInstallation` ranks by scope against the current cwd and prefers an existing directory. Writes replace the file with v2 (so a v1/v3 file becomes v2 after `install-local`).
