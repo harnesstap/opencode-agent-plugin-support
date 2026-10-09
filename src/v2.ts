@@ -2,6 +2,7 @@ import { collectContext, firstBlock, runHookGroups, type HookRunResult } from ".
 import { toV2McpConfig, splitModelRef } from "./inject.js";
 import { basePayload, hookEnv } from "./hook-payload.js";
 import { mcpServerIds, type LoadedBridge } from "./runtime.js";
+import { isSkillModelInvocable } from "./skills.js";
 import { toClaudeTool } from "./tool-names.js";
 import type { EnabledPlugin } from "./discover.js";
 import type { RuntimePaths } from "./paths.js";
@@ -26,6 +27,8 @@ export type V2CommandEditor = {
     name: string;
     description?: string;
     template?: string;
+    argumentHint?: string;
+    hints?: string[];
     execute?: (input: {
       sessionID: string;
       prompt?: { text?: string };
@@ -166,6 +169,7 @@ export async function setup(ctx: V2PluginContext, bridge: LoadedBridge): Promise
       for (const plugin of plugins) {
         for (const skill of plugin.skills) {
           try {
+            if (!isSkillModelInvocable(skill)) continue;
             if (editor.get?.(skill.name)) continue;
             editor.add({
               id: skill.name,
@@ -190,6 +194,9 @@ export async function setup(ctx: V2PluginContext, bridge: LoadedBridge): Promise
             name,
             description: def.description,
             template: def.template,
+            ...(def.argumentHint
+              ? { argumentHint: def.argumentHint, hints: [def.argumentHint] }
+              : {}),
             execute: async ({ sessionID, prompt, delivery }) => {
               const text = def.template.replaceAll("$ARGUMENTS", prompt?.text ?? "");
               await ctx.session?.prompt?.({ ...prompt, sessionID, text, delivery });

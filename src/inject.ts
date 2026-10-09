@@ -1,14 +1,21 @@
-import path from "node:path";
 import type { EnabledPlugin } from "./discover.js";
 import { namespaced } from "./discover.js";
 import { mapClaudeModel } from "./agents.js";
 import { claudeToolsToOpenCodeMap } from "./tool-names.js";
+import {
+  ensureArgumentsPlaceholder,
+  isSkillModelInvocable,
+  isSkillUserInvocable,
+  pluginSkillCommandName,
+  pluginSkillCommandTemplate,
+} from "./skills.js";
 
 export type OpenCodeCommand = {
   template: string;
   description?: string;
   agent?: string;
   model?: string;
+  argumentHint?: string;
 };
 
 export type OpenCodeAgent = {
@@ -42,15 +49,27 @@ export function buildConfigPatch(plugins: EnabledPlugin[]): OpenCodeConfigPatch 
     for (const cmd of plugin.commands) {
       const key = namespaced(plugin.name, cmd.name);
       command[key] = {
-        template: cmd.template.includes("$ARGUMENTS") ? cmd.template : `${cmd.template}\n\n$ARGUMENTS`,
+        template: ensureArgumentsPlaceholder(cmd.template),
         description: cmd.description ?? `${plugin.name} command ${cmd.name}`,
         agent: cmd.agent,
         model: mapClaudeModel(cmd.model),
+        ...(cmd.argumentHint ? { argumentHint: cmd.argumentHint } : {}),
       };
       if (cmd.allowedTools && cmd.allowedTools.length > 0) {
         // OpenCode command schema has no allowedTools; encoded in description.
         command[key]!.description = `${command[key]!.description} (tools: ${cmd.allowedTools.join(", ")})`;
       }
+    }
+
+    for (const skill of plugin.skills) {
+      if (!isSkillUserInvocable(skill)) continue;
+      const key = pluginSkillCommandName(plugin.name, skill.name);
+      if (command[key]) continue; // existing plugin command of the same name wins
+      command[key] = {
+        template: ensureArgumentsPlaceholder(pluginSkillCommandTemplate(plugin.name, plugin.pluginRoot, skill)),
+        description: skill.description || `${plugin.name} skill ${skill.name}`,
+        ...(skill.argumentHint ? { argumentHint: skill.argumentHint } : {}),
+      };
     }
 
     for (const item of plugin.agents) {
@@ -73,7 +92,7 @@ export function buildConfigPatch(plugins: EnabledPlugin[]): OpenCodeConfigPatch 
 
     const skillDirs = new Set<string>();
     for (const skill of plugin.skills) {
-      skillDirs.add(path.dirname(skill.dir));
+      if (!isSkillModelInvocable(skill)) continue;
       skillDirs.add(skill.dir);
       skillNames.push(skill.name);
     }

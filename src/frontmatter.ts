@@ -47,3 +47,28 @@ export function splitList(value: unknown): string[] {
   }
   return [String(value)];
 }
+
+/** First non-empty string among frontmatter keys (hyphenated or camelCase). */
+export function frontmatterString(data: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = data[key];
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return undefined;
+}
+
+/**
+ * Claude Code boolean frontmatter: true/false plus yes/no/on/off/1/0 (any case).
+ * Missing or unrecognized values return `defaultValue`.
+ */
+export function parseYamlBoolean(value: unknown, defaultValue: boolean): boolean {
+  if (value === undefined || value === null || value === "") return defaultValue;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true" || normalized === "yes" || normalized === "on" || normalized === "1") return true;
+    if (normalized === "false" || normalized === "no" || normalized === "off" || normalized === "0") return false;
+  }
+  return defaultValue;
+}

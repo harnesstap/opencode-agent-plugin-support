@@ -146,9 +146,9 @@ npx opencode-claude-plugins marketplace-add my-market github:org/repo
 
 | Claude | OpenCode v2 | OpenCode v1 | Notes |
 | --- | --- | --- | --- |
-| Skills | `ctx.skill.transform` | `config.skills.paths` | Folder names as skill names. OpenCode requires kebab-case `name` + `description` in `SKILL.md`. Overlapping manifest `skills` paths and `skills/` are deduped. |
+| Skills | `ctx.skill.transform` | `config.skills.paths` | Folder names as skill names. Also invocable as `/plugin:skill` (see Commands). `user-invocable: false` skips the slash command. `disable-model-invocation: true` keeps `/plugin:skill` but omits the skill from the model's list. OpenCode requires kebab-case `name` + `description` in `SKILL.md`. Overlapping manifest `skills` paths and `skills/` are deduped. |
 | MCP | `ctx.mcp.transform` (`disabled`) | `config.mcp` (`enabled`) | `${CLAUDE_PLUGIN_ROOT}` / `_DATA` / `_PROJECT_DIR` / `$ENV` expanded. stdio → local; `url` / `http` / `sse` / `ws` → remote. |
-| Commands | `ctx.command.transform` | `config.command` | Namespaced `plugin:command`. `$ARGUMENTS` works. |
+| Commands | `ctx.command.transform` | `config.command` | Namespaced `plugin:command`, plus `/plugin:skill` for each user-invocable plugin skill. `$ARGUMENTS` works. An existing plugin command of the same name wins. |
 | Instructions | re-injected on every `session.context` | `config.instructions` + system transform | Plugin-root `CLAUDE.md` / `AGENTS.md` / `INSTRUCTIONS.md`. v2 context is per model call and is not persisted. |
 | Agents | `ctx.agent.transform` `update()` (inserts if missing) | `config.agent` | Namespaced `plugin:agent`, `mode: "subagent"`. No files copied into user dirs. v2 tool allowlists are not 1:1 with Claude `tools:`. |
 | Hooks | tool / session / permission / event subscribe | v1 hook object | Command hooks (`type: "command"`) only. See table below. |
@@ -159,7 +159,7 @@ npx opencode-claude-plugins marketplace-add my-market github:org/repo
 
 **Also:**
 
-- Skills cannot be namespaced as `plugin:name` (OpenCode skill names are kebab-case only). Commands, agents, and MCP **are** namespaced as `plugin:component`.
+- Skill **ids** stay kebab-case (OpenCode cannot namespace them as `plugin:name`). Invoke a plugin skill with `/plugin:skill` even if a user skill in `~/.config/opencode/skills` shares the name — the command inlines that plugin's `SKILL.md`. Commands, agents, and MCP **are** namespaced as `plugin:component`.
 - v2 built-in tool ids `shell`, `patch`, and `subagent` map to Claude `Bash`, `Edit`, and `Task` for hook matchers. Plugin MCP tools like `fixture-demo_echo-api_echo` map to `mcp__plugin_fixture-demo_echo-api__echo`.
 - `${user_config.*}` is expanded only if values are supplied; there is no Claude `/config` UI.
 - On v1 builds that scan skills before plugin config hooks, skills may not appear until that order is fixed upstream.
