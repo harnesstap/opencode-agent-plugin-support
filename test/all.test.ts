@@ -1,21 +1,24 @@
-import { cpSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { mapClaudeModel } from "../src/agents.js";
 import { loadCommands } from "../src/commands.js";
+import { main as cliMain } from "../src/cli.js";
 import { discoverEnabledPlugins, loadPluginFromDirectory } from "../src/discover.js";
 import { isPluginEnabled, loadActivation, parsePluginId, resolvePluginEnablement, setLayerEnabled } from "../src/enablement.js";
 import { expandString } from "../src/expand.js";
 import { parseFrontmatter, parseYamlBoolean, splitList } from "../src/frontmatter.js";
 import { interpretHookResult, matchingHandlers, runHookCommand } from "../src/hook-runtime.js";
-import { parseHooksObject } from "../src/hooks.js";
+import { loadHooks, parseHooksObject } from "../src/hooks.js";
 import { parseInstalledPluginsDatabase, pickInstallation, resolveInstallPath } from "../src/installed.js";
 import { applyConfigPatch, buildConfigPatch, toV2McpConfig } from "../src/inject.js";
 import { createClaudeCodeBridge } from "../src/index.js";
 import { loadManifestFromRoot, resolveComponentPath } from "../src/manifest.js";
 import { loadMcpServers } from "../src/mcp.js";
+import { pluginDataDir } from "../src/paths.js";
+import { loadBridge } from "../src/runtime.js";
 import { writesThroughClaudePluginRegistry } from "../src/registry-guard.js";
 import {
   isSkillModelInvocable,
@@ -649,3 +652,154 @@ describe("install-local registry guard", () => {
 function copyDir(from: string, to: string): void {
   cpSync(from, to, { recursive: true });
 }
+
+function writeInstalled(home: string, plugins: Record<string, unknown>): void {
+  const store = path.join(home, ".agents", "plugins");
+  mkdirSync(store, { recursive: true });
+  writeFileSync(path.join(store, "installed_plugins.json"), JSON.stringify({ version: 2, plugins }));
+}
+
+describe("load isolation", () => {
+  it("skips a malformed installed_plugins.json and still loads extraPluginDirs", () => {
+    const home = tmp();
+    mkdirSync(path.join(home, ".agents", "plugins"), { recursive: true });
+    writeFileSync(path.join(home, ".agents", "plugins", "installed_plugins.json"), "{ not json");
+    const loaded = loadBridge({
+      home,
+      cwd: tmp(),
+      env: process.env,
+      options: { extraPluginDirs: { "fixture-demo@local": fixtureRoot } },
+    });
+    expect(loaded.plugins.map((plugin) => plugin.id)).toEqual(["fixture-demo@local"]);
+  });
+
+  it("skips one plugin with a malformed plugin.json and loads the other", () => {
+    const home = tmp();
+    const cwd = tmp();
+    const store = path.join(home, ".agents", "plugins");
+    const good = path.join(store, "cache", "local", "good", "1.0.0");
+    const bad = path.join(store, "cache", "local", "bad", "1.0.0");
+    mkdirSync(good, { recursive: true });
+    mkdirSync(path.join(bad, ".claude-plugin"), { recursive: true });
+    copyDir(fixtureRoot, good);
+    writeFileSync(path.join(bad, ".claude-plugin", "plugin.json"), "{ broken");
+    writeInstalled(home, {
+      "good@local": [{ scope: "user", installPath: good, version: "1.0.0" }],
+      "bad@local": [{ scope: "user", installPath: bad, version: "1.0.0" }],
+    });
+    const discovered = discoverEnabledPlugins({ home, cwd, env: process.env });
+    expect(discovered.enabled.map((plugin) => plugin.id)).toEqual(["good@local"]);
+    expect(discovered.skipped.some((item) => item.id === "bad@local" && /plugin\.json/.test(item.reason))).toBe(true);
+  });
+
+  it("skips malformed hooks.json without dropping skills", () => {
+    const root = tmp();
+    mkdirSync(path.join(root, ".claude-plugin"), { recursive: true });
+    mkdirSync(path.join(root, "hooks"), { recursive: true });
+    mkdirSync(path.join(root, "skills", "ok"), { recursive: true });
+    writeFileSync(path.join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "partial" }));
+    writeFileSync(path.join(root, "hooks", "hooks.json"), "{ no");
+    writeFileSync(path.join(root, "skills", "ok", "SKILL.md"), "---\nname: ok\ndescription: d\n---\n\nbody\n");
+    const plugin = loadPluginFromDirectory(root, "partial@local", { home: tmp(), cwd: tmp(), env: process.env });
+    expect(plugin.skills.map((skill) => skill.name)).toEqual(["ok"]);
+    expect(plugin.hooks).toEqual({});
+    expect(loadHooks(root, plugin.manifest, { pluginRoot: root, pluginData: root, projectDir: root, env: {} })).toEqual(
+      {},
+    );
+  });
+
+  it("skips malformed .mcp.json without dropping skills", () => {
+    const root = tmp();
+    mkdirSync(path.join(root, ".claude-plugin"), { recursive: true });
+    mkdirSync(path.join(root, "skills", "ok"), { recursive: true });
+    writeFileSync(path.join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "mcp-bad" }));
+    writeFileSync(path.join(root, ".mcp.json"), "not-json");
+    writeFileSync(path.join(root, "skills", "ok", "SKILL.md"), "---\nname: ok\ndescription: d\n---\n\nbody\n");
+    const plugin = loadPluginFromDirectory(root, "mcp-bad@local", { home: tmp(), cwd: tmp(), env: process.env });
+    expect(plugin.skills.map((skill) => skill.name)).toEqual(["ok"]);
+    expect(plugin.mcp).toEqual({});
+    expect(
+      loadMcpServers(root, plugin.manifest, { pluginRoot: root, pluginData: root, projectDir: root, env: {} }),
+    ).toEqual({});
+  });
+
+  it("skips a skill with bad YAML frontmatter and keeps the rest", () => {
+    const root = tmp();
+    mkdirSync(path.join(root, ".claude-plugin"), { recursive: true });
+    mkdirSync(path.join(root, "skills", "good"), { recursive: true });
+    mkdirSync(path.join(root, "skills", "broken"), { recursive: true });
+    writeFileSync(path.join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "fm" }));
+    writeFileSync(path.join(root, "skills", "good", "SKILL.md"), "---\nname: good\ndescription: d\n---\n\nok\n");
+    writeFileSync(path.join(root, "skills", "broken", "SKILL.md"), "---\nname: [unterminated\n---\n\nnope\n");
+    const plugin = loadPluginFromDirectory(root, "fm@local", { home: tmp(), cwd: tmp(), env: process.env });
+    expect(plugin.skills.map((skill) => skill.name)).toEqual(["good"]);
+  });
+});
+
+describe("plugin data dir and install-local", () => {
+  it("creates CLAUDE_PLUGIN_DATA on first use", () => {
+    const home = tmp();
+    const dir = pluginDataDir({ home, cwd: tmp(), env: process.env }, "demo@local");
+    expect(dir).toBe(path.join(home, ".agents", "plugins", "data", "demo-local"));
+    expect(path.basename(path.dirname(dir))).toBe("data");
+    expect(existsSync(dir)).toBe(true);
+  });
+
+  it("install-local errors when the directory does not exist", () => {
+    const previous = process.env.HOME;
+    const home = tmp();
+    process.env.HOME = home;
+    const stderr = { write: (chunk: string) => (stderr.text += chunk), text: "" };
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = stderr.write as typeof process.stderr.write;
+    try {
+      const code = cliMain(["install-local", path.join(home, "missing-plugin")]);
+      expect(code).toBe(1);
+      expect(stderr.text).toMatch(/does not exist/);
+    } finally {
+      process.stderr.write = original;
+      if (previous === undefined) delete process.env.HOME;
+      else process.env.HOME = previous;
+    }
+  });
+});
+
+describe("PreToolUse timeout", () => {
+  it("marks a timed-out hook and v1 PreToolUse fails closed", async () => {
+    const result = runHookCommand(
+      { type: "command", command: "sleep 2", timeout: 0.05 },
+      { tool_name: "Bash" },
+      { cwd: process.cwd(), env: process.env },
+    );
+    expect(result.timedOut).toBe(true);
+
+    const root = tmp();
+    mkdirSync(path.join(root, ".claude-plugin"), { recursive: true });
+    mkdirSync(path.join(root, "hooks"), { recursive: true });
+    writeFileSync(path.join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "slow" }));
+    writeFileSync(
+      path.join(root, "hooks", "hooks.json"),
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "sleep 2", timeout: 0.05 }] }],
+        },
+      }),
+    );
+    const home = tmp();
+    const cwd = tmp();
+    const previousHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const hooks = await createClaudeCodeBridge({
+        directory: cwd,
+        options: { skipInstalled: true, extraPluginDirs: { "slow@local": root } },
+      });
+      await expect(
+        hooks["tool.execute.before"]({ tool: "bash", sessionID: "s", callID: "c" }, { args: {} }),
+      ).rejects.toThrow(/timed out/i);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+    }
+  });
+});

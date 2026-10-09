@@ -1,12 +1,27 @@
 import fs from "node:fs";
 import path from "node:path";
 
+export class JsonParseError extends Error {
+  readonly filePath: string;
+
+  constructor(filePath: string, cause: unknown) {
+    super(`malformed JSON: ${filePath}`);
+    this.name = "JsonParseError";
+    this.filePath = filePath;
+    this.cause = cause;
+  }
+}
+
 export function readJsonFile<T>(filePath: string): T | undefined {
   if (!fs.existsSync(filePath)) return undefined;
   const raw = fs.readFileSync(filePath, "utf8");
   const trimmed = raw.replace(/^\uFEFF/, "").trim();
   if (!trimmed) return undefined;
-  return JSON.parse(trimmed) as T;
+  try {
+    return JSON.parse(trimmed) as T;
+  } catch (cause) {
+    throw new JsonParseError(filePath, cause);
+  }
 }
 
 export function writeJsonFile(filePath: string, value: unknown): void {

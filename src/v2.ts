@@ -1,5 +1,7 @@
 import { collectContext, firstBlock, runHookGroups, type HookRunResult } from "./hook-runtime.js";
+import { PLUGIN_ID } from "./identity.js";
 import { toV2McpConfig, splitModelRef } from "./inject.js";
+import { error } from "./log.js";
 import { basePayload, hookEnv } from "./hook-payload.js";
 import { mcpServerIds, type LoadedBridge } from "./runtime.js";
 import { isSkillModelInvocable } from "./skills.js";
@@ -7,7 +9,7 @@ import { toClaudeTool } from "./tool-names.js";
 import type { EnabledPlugin } from "./discover.js";
 import type { RuntimePaths } from "./paths.js";
 
-export const PLUGIN_ID = "opencode-claude-plugins";
+export { PLUGIN_ID };
 
 type MutableRecord = Record<string, unknown>;
 
@@ -178,8 +180,8 @@ export async function setup(ctx: V2PluginContext, bridge: LoadedBridge): Promise
               path: skill.filePath,
               content: skill.body,
             });
-          } catch (error) {
-            console.error(`[opencode-claude-plugins] skill "${skill.name}" rejected:`, error);
+          } catch (cause) {
+            error(`skill "${skill.name}" rejected:`, cause);
           }
         }
       }
@@ -202,8 +204,8 @@ export async function setup(ctx: V2PluginContext, bridge: LoadedBridge): Promise
               await ctx.session?.prompt?.({ ...prompt, sessionID, text, delivery });
             },
           });
-        } catch (error) {
-          console.error(`[opencode-claude-plugins] command "${name}" rejected:`, error);
+        } catch (cause) {
+          error(`command "${name}" rejected:`, cause);
         }
       }
     });
@@ -214,8 +216,8 @@ export async function setup(ctx: V2PluginContext, bridge: LoadedBridge): Promise
       for (const [name, spec] of Object.entries(patch.mcp)) {
         try {
           editor.set(name, toV2McpConfig(spec, options.mcpDisabled === true));
-        } catch (error) {
-          console.error(`[opencode-claude-plugins] mcp "${name}" rejected:`, error);
+        } catch (cause) {
+          error(`mcp "${name}" rejected:`, cause);
         }
       }
     });
@@ -226,8 +228,8 @@ export async function setup(ctx: V2PluginContext, bridge: LoadedBridge): Promise
       for (const [id, def] of Object.entries(patch.agent)) {
         try {
           registerAgent(editor, id, def);
-        } catch (error) {
-          console.error(`[opencode-claude-plugins] agent "${id}" rejected:`, error);
+        } catch (cause) {
+          error(`agent "${id}" rejected:`, cause);
         }
       }
     });
@@ -311,6 +313,10 @@ export async function setup(ctx: V2PluginContext, bridge: LoadedBridge): Promise
       if (result.updatedInput && event.input && typeof event.input === "object") {
         Object.assign(event.input as object, result.updatedInput);
       }
+    }
+    const timedOut = results.find((result) => result.timedOut);
+    if (timedOut) {
+      throw new Error(`PreToolUse hook timed out (fail-closed) for ${tool}`);
     }
     const blocked = firstBlock(results);
     if (blocked) throw new Error(blocked.blockReason ?? `Blocked by PreToolUse hook (${tool})`);
@@ -396,9 +402,9 @@ export async function setup(ctx: V2PluginContext, bridge: LoadedBridge): Promise
             runAll(plugins, paths, "Stop", { session_id: sessionID, stop_hook_active: true });
           }
         }
-      } catch (error) {
+      } catch (cause) {
         if (abort.signal.aborted) return;
-        console.error("[opencode-claude-plugins] event subscribe failed:", error);
+        error("event subscribe failed:", cause);
       }
     })();
   }

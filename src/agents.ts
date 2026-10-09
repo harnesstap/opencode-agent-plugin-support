@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseFrontmatter, splitList } from "./frontmatter.js";
 import { isDirectory, isFile, walkFiles } from "./fs-utils.js";
+import { warn } from "./log.js";
 import { asPathList, type PluginManifest, resolveComponentPath } from "./manifest.js";
 import { claudeToolsToOpenCodeMap } from "./tool-names.js";
 
@@ -62,14 +63,24 @@ function fromMarkdownFile(filePath: string, fallbackName: string): LoadedAgent {
   };
 }
 
+function tryMarkdownAgent(filePath: string, fallbackName: string): LoadedAgent | undefined {
+  try {
+    return fromMarkdownFile(filePath, fallbackName);
+  } catch (cause) {
+    warn(`skipping agent ${filePath}: ${cause instanceof Error ? cause.message : cause}`);
+    return undefined;
+  }
+}
+
 function collectAgents(abs: string): LoadedAgent[] {
   if (isFile(abs) && abs.endsWith(".md")) {
-    return [fromMarkdownFile(abs, path.basename(abs, path.extname(abs)))];
+    const loaded = tryMarkdownAgent(abs, path.basename(abs, path.extname(abs)));
+    return loaded ? [loaded] : [];
   }
   if (!isDirectory(abs)) return [];
-  return walkFiles(abs, (file) => file.endsWith(".md")).map((file) =>
-    fromMarkdownFile(file, agentNameFromFile(file, abs)),
-  );
+  return walkFiles(abs, (file) => file.endsWith(".md"))
+    .map((file) => tryMarkdownAgent(file, agentNameFromFile(file, abs)))
+    .filter((item): item is LoadedAgent => Boolean(item));
 }
 
 export function loadAgents(pluginRoot: string, manifest: PluginManifest): LoadedAgent[] {

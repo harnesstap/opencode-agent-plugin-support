@@ -21,7 +21,9 @@ A root `index.js` re-exports `./dist/index.js` so a **directory** path in v2 `pl
 5. Find the plugin root (directory containing `.claude-plugin/plugin.json` or equivalent), load the manifest, hydrate skills / commands / agents / MCP / instructions / hooks.
 6. Plugin option `extraPluginDirs` (`{ id: "/abs/path" }`) appends more trees without a registry write.
 
-`${CLAUDE_PLUGIN_DATA}` maps to `~/.agents/plugins/data/<slug>/`. Plugin `bin/` is prepended onto `PATH` (v1 `shell.env`, v2 `ctx.shell.hook("create.before")`) while the plugin is enabled.
+`${CLAUDE_PLUGIN_DATA}` maps to `~/.agents/plugins/data/<slug>/` and that directory is created on first use. Plugin `bin/` is prepended onto `PATH` (v1 `shell.env`, v2 `ctx.shell.hook("create.before")`) while the plugin is enabled.
+
+Malformed `installed_plugins.json`, a plugin's `plugin.json`, `hooks.json`, `.mcp.json`, or YAML frontmatter is skipped with a warning; other plugins and components still load. The OpenCode plugin `id` is `opencode-agent-plugin-support`.
 
 Duplicate `SKILL.md` paths (manifest `skills` overlapping default `skills/`) are skipped.
 
@@ -83,7 +85,7 @@ Plugin MCP tool ids on v2 look like `fixture-demo_echo-api_echo` and map to Clau
 
 **SessionStart / SessionEnd / PreCompact** matchers are session sources (`startup`, `clear`, `auto` / `manual`), not tool names. Passing no matcher name still skips groups that declare a matcher.
 
-Processes get Claude-style stdin JSON (`hook_event_name`, `session_id`, `cwd`, `tool_name`, `tool_input`, …) and `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PLUGIN_DATA` / `CLAUDE_PROJECT_DIR` in the environment. Timeout defaults to 30s (`hooks.json` `timeout` is seconds). If `args` is empty, the command string is run via the shell.
+Processes get Claude-style stdin JSON (`hook_event_name`, `session_id`, `cwd`, `tool_name`, `tool_input`, …) and `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PLUGIN_DATA` / `CLAUDE_PROJECT_DIR` in the environment. Timeout defaults to 30s (`hooks.json` `timeout` is seconds). If `args` is empty, the command string is run via the shell. A **PreToolUse** timeout fails closed (the tool call is blocked). Other hook events do not treat timeout as a block.
 
 Stdout is parsed as JSON when possible (`hookSpecificOutput`, `decision`, `additionalContext`, `updatedInput`, `continue`). Interpretation:
 

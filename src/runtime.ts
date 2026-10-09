@@ -1,5 +1,6 @@
 import { discoverEnabledPlugins, loadPluginFromDirectory, type EnabledPlugin } from "./discover.js";
 import { buildConfigPatch, type OpenCodeConfigPatch } from "./inject.js";
+import { warn } from "./log.js";
 import { parsePluginOptions, type PluginOptions } from "./plugin-options.js";
 import { defaultRuntimePaths, type RuntimePaths } from "./paths.js";
 
@@ -27,15 +28,22 @@ export function loadBridge(input: {
     ? { enabled: [] as EnabledPlugin[], skipped: [] as Array<{ id: string; reason: string }> }
     : discoverEnabledPlugins(paths);
   const plugins = [...discovered.enabled];
+  const skipped = [...discovered.skipped];
   for (const [id, dir] of Object.entries(options.extraPluginDirs ?? {})) {
-    plugins.push(loadPluginFromDirectory(dir, id, paths));
+    try {
+      plugins.push(loadPluginFromDirectory(dir, id, paths));
+    } catch (cause) {
+      const reason = `failed to load extraPluginDirs entry: ${cause instanceof Error ? cause.message : cause}`;
+      warn(`skipping plugin "${id}": ${reason}`);
+      skipped.push({ id, reason });
+    }
   }
   return {
     paths,
     options,
     plugins,
     patch: buildConfigPatch(plugins),
-    skipped: discovered.skipped,
+    skipped,
   };
 }
 

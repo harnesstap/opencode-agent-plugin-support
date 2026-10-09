@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isDirectory, isFile, readJsonFile } from "./fs-utils.js";
+import { isDirectory, isFile, JsonParseError, readJsonFile } from "./fs-utils.js";
 
 export type PluginAuthor = {
   name: string;
@@ -70,7 +70,13 @@ export function loadManifestFromRoot(pluginRoot: string, fallbackName: string): 
       manifest: { name: fallbackName, defaultEnabled: true },
     };
   }
-  const raw = readJsonFile<Partial<PluginManifest>>(manifestPath) ?? {};
+  let raw: Partial<PluginManifest>;
+  try {
+    raw = readJsonFile<Partial<PluginManifest>>(manifestPath) ?? {};
+  } catch (cause) {
+    const detail = cause instanceof JsonParseError ? cause.message : String(cause);
+    throw new Error(`malformed plugin.json at ${manifestPath}: ${detail}`);
+  }
   const name = typeof raw.name === "string" && raw.name.trim() ? raw.name.trim() : fallbackName;
   return {
     pluginRoot,

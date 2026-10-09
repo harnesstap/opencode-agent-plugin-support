@@ -1,5 +1,6 @@
 import path from "node:path";
-import { isDirectory, readJsonFile } from "./fs-utils.js";
+import { isDirectory, JsonParseError, readJsonFile } from "./fs-utils.js";
+import { warn } from "./log.js";
 import { expandUserPath, installedPluginsPath, pluginsDir, type RuntimePaths, versionedCachePath } from "./paths.js";
 
 export type PluginScope = "user" | "project" | "local" | "managed" | "flag";
@@ -107,8 +108,15 @@ function mergeRecords(records: InstalledPluginRecord[]): InstalledPluginRecord[]
 }
 
 export function loadInstalledPlugins(paths: RuntimePaths): InstalledPluginRecord[] {
-  const raw = readJsonFile<unknown>(installedPluginsPath(paths));
-  return parseInstalledPluginsDatabase(raw);
+  const filePath = installedPluginsPath(paths);
+  try {
+    const raw = readJsonFile<unknown>(filePath);
+    return parseInstalledPluginsDatabase(raw);
+  } catch (cause) {
+    const detail = cause instanceof JsonParseError ? cause.message : String(cause);
+    warn(`skipping ${filePath}: ${detail}`);
+    return [];
+  }
 }
 
 export function pickInstallation(

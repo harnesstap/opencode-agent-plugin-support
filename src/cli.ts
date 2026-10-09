@@ -1,18 +1,21 @@
 #!/usr/bin/env node
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { discoverEnabledPlugins, loadPluginFromDirectory } from "./discover.js";
 import {
   loadActivation,
   setLayerEnabled,
   setUserExtraMarketplaces,
 } from "./enablement.js";
+import { isDirectory } from "./fs-utils.js";
+import { CLI_NAME } from "./identity.js";
 import { defaultRuntimePaths } from "./paths.js";
 import { CLAUDE_REGISTRY_WRITE_HELP, writesThroughClaudePluginRegistry } from "./registry-guard.js";
 import { saveKnownMarketplace, upsertInstallation } from "./registry-write.js";
 import { findPluginRoot, loadManifestFromRoot } from "./manifest.js";
 
-function usage(): string {
-  return `opencode-claude-plugins <command>
+export function usage(): string {
+  return `${CLI_NAME} <command>
 
 Commands:
   list                         Show installed plugins with effective enablement and source
@@ -24,7 +27,7 @@ Commands:
 `;
 }
 
-function main(argv: string[]): number {
+export function main(argv: string[]): number {
   const [cmd, ...rest] = argv;
   const paths = defaultRuntimePaths();
   if (!cmd || cmd === "-h" || cmd === "--help") {
@@ -100,6 +103,10 @@ function main(argv: string[]): number {
         return 1;
       }
       const abs = path.resolve(dir);
+      if (!isDirectory(abs)) {
+        process.stderr.write(`directory does not exist: ${abs}\n`);
+        return 1;
+      }
       const root = findPluginRoot(abs) ?? abs;
       const loaded = loadManifestFromRoot(root, path.basename(root));
       const id = positional[1] ?? `${loaded.manifest.name}@local`;
@@ -142,4 +149,16 @@ function main(argv: string[]): number {
   }
 }
 
-process.exitCode = main(process.argv.slice(2));
+function isDirectRun(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return path.resolve(entry) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectRun()) {
+  process.exitCode = main(process.argv.slice(2));
+}

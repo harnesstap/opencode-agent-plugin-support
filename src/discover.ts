@@ -20,6 +20,7 @@ import {
 import { loadInstructions, type LoadedInstructions } from "./instructions.js";
 import { findPluginRoot, loadManifestFromRoot, type PluginManifest } from "./manifest.js";
 import { loadMcpServers, type OpenCodeMcp } from "./mcp.js";
+import { warn } from "./log.js";
 import { defaultRuntimePaths, pluginDataDir, type RuntimePaths } from "./paths.js";
 import { loadSkills, type LoadedSkill } from "./skills.js";
 import { isDirectory } from "./fs-utils.js";
@@ -93,15 +94,31 @@ export function discoverEnabledPlugins(overrides: Partial<RuntimePaths> = {}): D
       statuses.push({ ...statusBase, enabled: false, reason: "could not find plugin root" });
       continue;
     }
-    const loaded = loadManifestFromRoot(pluginRoot, record.name);
+    let loaded;
+    try {
+      loaded = loadManifestFromRoot(pluginRoot, record.name);
+    } catch (cause) {
+      const reason = `malformed plugin.json: ${cause instanceof Error ? cause.message : cause}`;
+      warn(`skipping plugin "${record.id}": ${reason}`);
+      skipped.push({ id: record.id, reason });
+      statuses.push({ ...statusBase, enabled: false, reason });
+      continue;
+    }
     if (!isPluginEnabled(activation, record.id)) {
       skipped.push({ id: record.id, reason: "disabled" });
       statuses.push({ ...statusBase, enabled: false, reason: "disabled" });
       continue;
     }
-    const plugin = hydratePlugin(record, loaded.manifest, pluginRoot, paths);
-    enabled.push(plugin);
-    statuses.push({ ...statusBase, enabled: true, plugin });
+    try {
+      const plugin = hydratePlugin(record, loaded.manifest, pluginRoot, paths);
+      enabled.push(plugin);
+      statuses.push({ ...statusBase, enabled: true, plugin });
+    } catch (cause) {
+      const reason = `failed to load: ${cause instanceof Error ? cause.message : cause}`;
+      warn(`skipping plugin "${record.id}": ${reason}`);
+      skipped.push({ id: record.id, reason });
+      statuses.push({ ...statusBase, enabled: false, reason });
+    }
   }
 
   return { paths, activation, installed, enabled, skipped, statuses };
