@@ -16,6 +16,7 @@ export type HookRunResult = {
   permissionDecision?: "allow" | "deny" | "ask";
   continue?: boolean;
   systemMessage?: string;
+  timedOut: boolean;
 };
 
 export type HookJsonOutput = {
@@ -100,6 +101,7 @@ export function interpretHookResult(exitCode: number, stdout: string, stderr: st
     permissionDecision,
     continue: continueFlag,
     systemMessage: typeof json?.systemMessage === "string" ? json.systemMessage : undefined,
+    timedOut: false,
   };
 }
 
@@ -143,8 +145,11 @@ export function runHookCommand(
   });
   const stdout = spawned.stdout ?? "";
   const stderr = spawned.stderr ?? "";
+  const timedOut = Boolean(
+    spawned.error && (spawned.error as NodeJS.ErrnoException).code === "ETIMEDOUT",
+  );
   const exitCode = spawned.status ?? (spawned.signal ? 1 : 0);
-  return interpretHookResult(exitCode, stdout, stderr);
+  return { ...interpretHookResult(exitCode, stdout, stderr), timedOut };
 }
 
 export function runHookGroups(

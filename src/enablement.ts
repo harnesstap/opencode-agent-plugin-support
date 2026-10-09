@@ -1,4 +1,5 @@
-import { isFile, readJsonFile, writeJsonFile } from "./fs-utils.js";
+import { isFile, JsonParseError, readJsonFile, writeJsonFile } from "./fs-utils.js";
+import { warn } from "./log.js";
 import { projectPluginsJsonPath, type RuntimePaths, userPluginsJsonPath } from "./paths.js";
 
 export type ExtraKnownMarketplace = {
@@ -55,7 +56,14 @@ export function formatPluginId(name: string, marketplace?: string): string {
 
 function readActivationLayer(filePath: string): ActivationLayer {
   const exists = isFile(filePath);
-  const raw = exists ? readJsonFile<Partial<PluginsActivation> & Record<string, unknown>>(filePath) : undefined;
+  let raw: (Partial<PluginsActivation> & Record<string, unknown>) | undefined;
+  try {
+    raw = exists ? readJsonFile<Partial<PluginsActivation> & Record<string, unknown>>(filePath) : undefined;
+  } catch (cause) {
+    const detail = cause instanceof JsonParseError ? cause.message : String(cause);
+    warn(`skipping ${filePath}: ${detail}`);
+    return { path: filePath, exists, enabledPlugins: {} };
+  }
   if (!raw) {
     return { path: filePath, exists, enabledPlugins: {} };
   }

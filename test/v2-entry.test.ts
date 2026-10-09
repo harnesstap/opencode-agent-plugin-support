@@ -24,7 +24,7 @@ afterEach(() => {
 
 describe("v2 default export", () => {
   it("exports id + setup + v1 server", () => {
-    expect(plugin.id).toBe("opencode-claude-plugins");
+    expect(plugin.id).toBe("opencode-agent-plugin-support");
     expect(plugin.id).toBe(PLUGIN_ID);
     expect(typeof plugin.setup).toBe("function");
     expect(typeof plugin.server).toBe("function");

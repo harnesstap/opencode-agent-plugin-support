@@ -37,7 +37,7 @@ On OpenCode 2.0.24 a local `{ package, options }` entry is flattened to the dire
 
 Verified on **OpenCode 2.0.26** (`@opencode/cli`) with isolated `HOME`, `plugins: ["/abs/this-repo"]`, `install-local` of the fixture, `opencode serve`, and authenticated `/api/*`:
 
-- `GET /api/plugin` — `opencode-claude-plugins` `state.status=active`, source `local` `/…/index.js` (no v1 SchemaError)
+- `GET /api/plugin` — `opencode-agent-plugin-support` `state.status=active`, source `local` `/…/index.js` (no v1 SchemaError)
 - `GET /api/skill` — `demo-skill`, `legacy-context`, `hello` (not `manual-deploy`, which is `disable-model-invocation`)
 - `GET /api/command` — `fixture-demo:hello`, `fixture-demo:demo-skill`, `fixture-demo:manual-deploy` (not `fixture-demo:legacy-context`). Public `Command.Info` is name+description only; templates are asserted in unit tests (`fixture-skill-ok` / plugin `SKILL.md` path).
 - `GET /api/mcp` — `fixture-demo:echo-api` and `fixture-demo:fixture-stdio` registered (`${CLAUDE_PLUGIN_ROOT}` expanded; fixture process exits by design)
@@ -47,7 +47,7 @@ Hook block/rewrite/`patch`→Edit were covered by mocked `setup(ctx)` tests, not
 
 Then start OpenCode in that directory (or `opencode serve` / `opencode api get /api/plugin` if those exist on your build) and check:
 
-1. Plugin `opencode-claude-plugins` is active (not a SchemaError about `default`).
+1. Plugin `opencode-agent-plugin-support` is active (not a SchemaError about `default`).
 2. `/fixture-demo:hello world` is a slash command. `/fixture-demo:demo-skill` and `/fixture-demo:manual-deploy` are skill commands whose templates include the plugin `SKILL.md` body.
 3. `@fixture-demo:reviewer` is mentionable as a subagent (registered via `agent.update`, not copied files).
 4. `skill` tool lists `demo-skill`.
@@ -61,7 +61,7 @@ Installing via the CLI registry:
 ```bash
 mkdir -p ~/.agents/plugins
 # if ~/.agents/plugins → ~/.claude/plugins, either use extraPluginDirs or:
-npx opencode-claude-plugins install-local ./test/fixtures/demo-plugin fixture-demo@local --write-claude-registry
+npx @harnesstap/opencode-agent-plugin-support install-local ./test/fixtures/demo-plugin fixture-demo@local --write-claude-registry
 ```
 
 ## v1
@@ -69,7 +69,7 @@ npx opencode-claude-plugins install-local ./test/fixtures/demo-plugin fixture-de
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-claude-plugins"]
+  "plugin": ["@harnesstap/opencode-agent-plugin-support"]
 }
 ```
 

@@ -1,31 +1,41 @@
-# opencode-claude-plugins
+# @harnesstap/opencode-agent-plugin-support
 
 [![CI](https://github.com/harnesstap/opencode-agent-plugin-support/actions/workflows/ci.yml/badge.svg)](https://github.com/harnesstap/opencode-agent-plugin-support/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![npm](https://img.shields.io/npm/v/@harnesstap/opencode-agent-plugin-support.svg)](https://www.npmjs.com/package/@harnesstap/opencode-agent-plugin-support)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/harnesstap/opencode-agent-plugin-support/blob/main/LICENSE)
 [![OpenCode](https://img.shields.io/badge/OpenCode-v2%20%7C%20v1%20%E2%89%A51.18.29-0ea5e9)](#compatibility)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugins%20compatible-7c3aed)](#compatibility)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
 Loads **Claude Code plugins** into OpenCode as native skills, slash commands, subagents, MCP servers, instructions, and lifecycle hooks. Plugin files stay where they are; nothing is copied into `.opencode/` or `~/.agents/skills`.
 
-## Install
+Unrelated to the former unscoped npm package `opencode-claude-plugins`.
 
-### OpenCode v2 (2.0+)
+## Quickstart
 
-Use the `plugins` key (not `plugin`):
+Plugins are read from **`~/.agents/plugins`**, same layout as `~/.claude/plugins`.
 
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "plugins": ["opencode-claude-plugins"]
-}
-```
+1. **Point `~/.agents/plugins` at your Claude plugin cache** (skip if you already keep plugins there):
 
-Restart OpenCode (`opencode service restart` if the background service is running). npm plugins land in OpenCode’s package cache.
+   ```bash
+   mkdir -p ~/.agents
+   ln -s ~/.claude/plugins ~/.agents/plugins
+   ```
 
-### Local checkout (v2)
+2. **Add this package** to `opencode.json` (`plugins`, not `plugin`):
 
-v2 only loads `index.js` / `index.ts` or `server.js` / `server.ts` **at the folder root**. It ignores `package.json` `"main"`, and a path to a file is rejected (`configured plugin path must be a directory`).
+   ```json
+   {
+     "$schema": "https://opencode.ai/config.json",
+     "plugins": ["@harnesstap/opencode-agent-plugin-support"]
+   }
+   ```
+
+3. **Restart OpenCode** (`opencode service restart` if a background service is running).
+
+### From git (local directory)
+
+v2 only loads `index.js` / `index.ts` at the **folder root**. It ignores `package.json` `"main"`, and a path to a file is rejected.
 
 ```bash
 git clone https://github.com/harnesstap/opencode-agent-plugin-support.git
@@ -36,19 +46,32 @@ npm run build
 
 ```json
 {
-  "plugins": ["/absolute/path/to/opencode-claude-plugins"]
+  "plugins": ["/absolute/path/to/opencode-agent-plugin-support"]
 }
 ```
 
-Do **not** point `plugins` at `dist/index.js` or `src/index.ts`.
+Restart OpenCode. Do **not** point `plugins` at `dist/index.js` or `src/index.ts`.
 
-Options (object form):
+## Security
+
+Hook commands (`type: "command"` in `hooks.json`) run as **your user**: full environment, project cwd, and a **30s default timeout** (`timeout` in `hooks.json` is seconds). They can run any shell you would.
+
+- **PreToolUse timeout is fail-closed:** if that hook hits the timeout, the tool call is blocked. A hung “deny this command” hook must not fail open.
+- **Other hook events** still do not block on timeout (the process is killed; OpenCode continues). Exit `2` / JSON `deny` still block where those events support it.
+
+Malformed `installed_plugins.json`, `plugin.json`, `hooks.json`, `.mcp.json`, or YAML frontmatter is skipped with a warning; other plugins keep loading.
+
+See [SECURITY.md](https://github.com/harnesstap/opencode-agent-plugin-support/blob/main/SECURITY.md) to report a vulnerability.
+
+## Options and compatibility
+
+Object form (npm package; local directory+options is dropped on OpenCode **2.0.24**):
 
 ```json
 {
   "plugins": [
     {
-      "package": "opencode-claude-plugins",
+      "package": "@harnesstap/opencode-agent-plugin-support",
       "options": {
         "extraPluginDirs": { "my-plugin@local": "/path/to/claude-plugin" },
         "skipInstalled": false,
@@ -59,41 +82,26 @@ Options (object form):
 }
 ```
 
-`extraPluginDirs` loads extra Claude plugin trees without writing a registry. `skipInstalled` skips `~/.agents/plugins/installed_plugins.json`.
-
-On OpenCode **2.0.24**, a local `{ "package": "/abs/path", "options": { … } }` entry is collapsed to the directory string and **options are dropped**. Prefer `install-local` (or `~/.agents/plugins/installed_plugins.json`) for Claude plugins, and list this package as a directory/`opencode-claude-plugins` spec. Options on a published npm plugin were not re-tested on that build.
+`extraPluginDirs` loads extra Claude plugin trees without writing a registry. `skipInstalled` skips `~/.agents/plugins/installed_plugins.json`. Prefer `install-local` (or that registry file) for Claude plugins if you need options on a local checkout.
 
 ### OpenCode v1
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-claude-plugins"]
+  "plugin": ["@harnesstap/opencode-agent-plugin-support"]
 }
 ```
 
-Needs OpenCode **1.18.29+** (object entrypoint with `server()`). Older v1 hosts expected a default function export.
+Needs OpenCode **1.18.29+** (object entrypoint with `server()`).
 
 ### Compatibility
 
 OpenCode **v2** is the primary target. A v1 `server()` export remains for OpenCode 1.18.29+. v2 does not run v1 plugin implementations.
 
-### Share Claude Code’s plugin cache
-
-If you already install plugins with Claude Code:
-
-```bash
-mkdir -p ~/.agents
-ln -s ~/.claude/plugins ~/.agents/plugins
-```
-
-That reuses the **install tree**. Enablement is separate (`~/.agents/plugins.json`); omit that file and every installed plugin stays on.
-
-`install-local` **refuses** to write through that symlink unless you pass `--write-claude-registry`. A dedicated `~/.agents/plugins` directory is safer if you do not want this CLI touching Claude’s `installed_plugins.json`.
+`install-local` **refuses** to write through a `~/.agents/plugins` → `~/.claude/plugins` symlink unless you pass `--write-claude-registry`.
 
 ## Where plugins live
-
-Installed plugins live under `~/.agents/plugins/` — the same layout as `~/.claude/plugins/`:
 
 ```text
 ~/.agents/plugins/
@@ -104,76 +112,62 @@ Installed plugins live under `~/.agents/plugins/` — the same layout as `~/.cla
   data/<plugin-id>/
 ```
 
-`installPath` from `installed_plugins.json` is used as-is (`~` / `$HOME` expanded). Relative paths are resolved from `~/.agents/plugins/` (so `cache/...` works). If that directory is missing, the versioned cache path is tried.
+`installPath` from `installed_plugins.json` is used as-is (`~` / `$HOME` expanded). Relative paths are resolved from `~/.agents/plugins/`. `${CLAUDE_PLUGIN_DATA}` is `~/.agents/plugins/data/<slug>/` and is created on first use.
 
 Project-scoped installs for **other** repos are ignored. If several entries remain, the one whose directory exists wins.
 
 ### Enablement
-
-Activation is read only from:
 
 | File | Role |
 | --- | --- |
 | `~/.agents/plugins.json` | User-level `enabledPlugins` |
 | `<repo>/.agents/plugins.json` | Project overlay; keys override the user file |
 
-Claude’s `~/.claude/settings.json` is not read.
-
-Every plugin in `installed_plugins.json` with a resolvable path is **enabled** unless `enabledPlugins` sets it to `false`. Missing file or missing key → enabled. Project keys override user keys. Manifest `defaultEnabled` is ignored.
-
-```json
-{
-  "enabledPlugins": {
-    "some-plugin@claude-plugins-official": false
-  },
-  "extraKnownMarketplaces": {
-    "my-market": {
-      "source": { "source": "github", "repo": "acme/plugins" }
-    }
-  }
-}
-```
+Claude’s `~/.claude/settings.json` is not read. Every resolvable installed plugin is **enabled** unless `enabledPlugins` sets it to `false`.
 
 ## CLI
 
+Bin name: `opencode-agent-plugin-support`.
+
 ```bash
-npx opencode-claude-plugins list
-npx opencode-claude-plugins enable name@marketplace
-npx opencode-claude-plugins disable name@marketplace --project
-npx opencode-claude-plugins install-local ./my-claude-plugin [name@local]
-npx opencode-claude-plugins install-local ./my-claude-plugin --write-claude-registry
-npx opencode-claude-plugins marketplace-add my-market github:org/repo
+npx @harnesstap/opencode-agent-plugin-support list
+npx @harnesstap/opencode-agent-plugin-support enable name@marketplace
+npx @harnesstap/opencode-agent-plugin-support disable name@marketplace --project
+npx @harnesstap/opencode-agent-plugin-support install-local ./my-claude-plugin [name@local]
+npx @harnesstap/opencode-agent-plugin-support install-local ./my-claude-plugin --write-claude-registry
+npx @harnesstap/opencode-agent-plugin-support marketplace-add my-market github:org/repo
 ```
+
+After a global install, the same commands work as `opencode-agent-plugin-support …`.
 
 - `list` — installed plugins, effective on/off, and source (`default` | `user` | `project`).
 - `enable` / `disable` — write the user file, or `--project` for the repo file.
-- `install-local` — register a local directory (enabled until you disable it). Does not clone git marketplaces. Refuses to overwrite Claude’s registry via a `~/.agents/plugins` → `~/.claude/plugins` symlink unless `--write-claude-registry` is set.
+- `install-local` — register a local directory (must exist). Does not clone git marketplaces.
 - `marketplace-add` — record an extra marketplace (`github:org/repo` or a path).
 
 ## Support
 
 | Claude | OpenCode v2 | OpenCode v1 | Notes |
 | --- | --- | --- | --- |
-| Skills | `ctx.skill.transform` | `config.skills.paths` | Folder names as skill names. Also invocable as `/plugin:skill` (see Commands). `user-invocable: false` skips the slash command. `disable-model-invocation: true` keeps `/plugin:skill` but omits the skill from the model's list. OpenCode requires kebab-case `name` + `description` in `SKILL.md`. Overlapping manifest `skills` paths and `skills/` are deduped. |
+| Skills | `ctx.skill.transform` | `config.skills.paths` | Folder names as skill names. Also invocable as `/plugin:skill`. `user-invocable: false` skips the slash command. `disable-model-invocation: true` keeps `/plugin:skill` but omits the skill from the model's list. OpenCode requires kebab-case `name` + `description` in `SKILL.md`. |
 | MCP | `ctx.mcp.transform` (`disabled`) | `config.mcp` (`enabled`) | `${CLAUDE_PLUGIN_ROOT}` / `_DATA` / `_PROJECT_DIR` / `$ENV` expanded. stdio → local; `url` / `http` / `sse` / `ws` → remote. |
 | Commands | `ctx.command.transform` | `config.command` | Namespaced `plugin:command`, plus `/plugin:skill` for each user-invocable plugin skill. `$ARGUMENTS` works. An existing plugin command of the same name wins. |
-| Instructions | re-injected on every `session.context` | `config.instructions` + system transform | Plugin-root `CLAUDE.md` / `AGENTS.md` / `INSTRUCTIONS.md`. v2 context is per model call and is not persisted. |
-| Agents | `ctx.agent.transform` `update()` (inserts if missing) | `config.agent` | Namespaced `plugin:agent`, `mode: "subagent"`. No files copied into user dirs. v2 tool allowlists are not 1:1 with Claude `tools:`. |
-| Hooks | tool / session / permission / event subscribe | v1 hook object | Command hooks (`type: "command"`) only. See table below. |
+| Instructions | re-injected on every `session.context` | `config.instructions` + system transform | Plugin-root `CLAUDE.md` / `AGENTS.md` / `INSTRUCTIONS.md`. |
+| Agents | `ctx.agent.transform` `update()` (inserts if missing) | `config.agent` | Namespaced `plugin:agent`, `mode: "subagent"`. |
+| Hooks | tool / session / permission / event subscribe | v1 hook object | Command hooks (`type: "command"`) only. |
 
-**Hooks wired on v2:** PreToolUse (block + `updatedInput`), PostToolUse / PostToolUseFailure (`additionalContext`), UserPromptSubmit, SessionStart (matcher = `startup` / `clear` / `compact`, re-added every model call), SessionEnd, Stop (`session.idle`), PermissionRequest (`permission.evaluate`), PreCompact (`session.compaction`).
+**Hooks wired on v2:** PreToolUse (block + `updatedInput`), PostToolUse / PostToolUseFailure (`additionalContext`), UserPromptSubmit, SessionStart (matcher = `startup` / `clear` / `compact`), SessionEnd, Stop (`session.idle`), PermissionRequest (`permission.evaluate`), PreCompact (`session.compaction`).
 
 **Not loaded:** LSP, output styles, themes, monitors, workflows, in-process JS mods, `.mcpb` bundles, HTTP/prompt/MCP/agent hooks, and most other Claude hook events.
 
-**Also:**
+Skill **ids** stay kebab-case (OpenCode cannot namespace them as `plugin:name`). Invoke a plugin skill with `/plugin:skill` even if a user skill shares the name. Commands, agents, and MCP **are** namespaced as `plugin:component`.
 
-- Skill **ids** stay kebab-case (OpenCode cannot namespace them as `plugin:name`). Invoke a plugin skill with `/plugin:skill` even if a user skill in `~/.config/opencode/skills` shares the name — the command inlines that plugin's `SKILL.md`. Commands, agents, and MCP **are** namespaced as `plugin:component`.
-- v2 built-in tool ids `shell`, `patch`, and `subagent` map to Claude `Bash`, `Edit`, and `Task` for hook matchers. Plugin MCP tools like `fixture-demo_echo-api_echo` map to `mcp__plugin_fixture-demo_echo-api__echo`.
-- `${user_config.*}` is expanded only if values are supplied; there is no Claude `/config` UI.
-- On v1 builds that scan skills before plugin config hooks, skills may not appear until that order is fixed upstream.
+v2 built-in tool ids `shell`, `patch`, and `subagent` map to Claude `Bash`, `Edit`, and `Task` for hook matchers.
+
+This OpenCode plugin’s `id` is `opencode-agent-plugin-support`.
 
 ## License
 
 MIT
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for how injection works, and [CONTRIBUTING.md](CONTRIBUTING.md) for development.
+How injection works: [ARCHITECTURE.md](https://github.com/harnesstap/opencode-agent-plugin-support/blob/main/ARCHITECTURE.md). Development: [CONTRIBUTING.md](https://github.com/harnesstap/opencode-agent-plugin-support/blob/main/CONTRIBUTING.md).

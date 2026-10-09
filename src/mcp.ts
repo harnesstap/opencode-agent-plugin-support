@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expandDeep, type ExpandContext } from "./expand.js";
-import { isFile, readJsonFile } from "./fs-utils.js";
+import { isFile, JsonParseError, readJsonFile } from "./fs-utils.js";
+import { warn } from "./log.js";
 import { asPathList, isRecord, type PluginManifest, resolveComponentPath } from "./manifest.js";
 
 export type OpenCodeMcpLocal = {
@@ -76,7 +77,13 @@ function serversFromObject(value: unknown, ctx: ExpandContext): Record<string, O
 
 function loadMcpFile(filePath: string, ctx: ExpandContext): Record<string, OpenCodeMcp> {
   if (!isFile(filePath)) return {};
-  return serversFromObject(readJsonFile<unknown>(filePath), ctx);
+  try {
+    return serversFromObject(readJsonFile<unknown>(filePath), ctx);
+  } catch (cause) {
+    const detail = cause instanceof JsonParseError ? cause.message : String(cause);
+    warn(`skipping MCP file ${filePath}: ${detail}`);
+    return {};
+  }
 }
 
 export function loadMcpServers(

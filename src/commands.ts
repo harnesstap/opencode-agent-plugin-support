@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseFrontmatter, splitList } from "./frontmatter.js";
 import { isDirectory, isFile, walkFiles } from "./fs-utils.js";
+import { warn } from "./log.js";
 import {
   asPathList,
   isRecord,
@@ -46,14 +47,24 @@ function fromMarkdownFile(filePath: string, name: string): LoadedCommand {
   };
 }
 
+function tryMarkdownCommand(filePath: string, name: string): LoadedCommand | undefined {
+  try {
+    return fromMarkdownFile(filePath, name);
+  } catch (cause) {
+    warn(`skipping command ${filePath}: ${cause instanceof Error ? cause.message : cause}`);
+    return undefined;
+  }
+}
+
 function collectMarkdownCommands(abs: string): LoadedCommand[] {
   if (isFile(abs) && abs.endsWith(".md")) {
-    return [fromMarkdownFile(abs, path.basename(abs, path.extname(abs)))];
+    const loaded = tryMarkdownCommand(abs, path.basename(abs, path.extname(abs)));
+    return loaded ? [loaded] : [];
   }
   if (!isDirectory(abs)) return [];
-  return walkFiles(abs, (file) => file.endsWith(".md")).map((file) =>
-    fromMarkdownFile(file, commandNameFromFile(file, abs)),
-  );
+  return walkFiles(abs, (file) => file.endsWith(".md"))
+    .map((file) => tryMarkdownCommand(file, commandNameFromFile(file, abs)))
+    .filter((item): item is LoadedCommand => Boolean(item));
 }
 
 export function loadCommands(pluginRoot: string, manifest: PluginManifest): LoadedCommand[] {
@@ -78,15 +89,19 @@ export function loadCommands(pluginRoot: string, manifest: PluginManifest): Load
     if (!isRecord(spec)) continue;
     const entry = spec as InlineCommand;
     if (typeof entry.source === "string") {
-      const filePath = resolveComponentPath(pluginRoot, entry.source);
-      const loaded = fromMarkdownFile(filePath, name);
-      out.push({
-        ...loaded,
-        description: entry.description ?? loaded.description,
-        argumentHint: entry.argumentHint ?? loaded.argumentHint,
-        model: entry.model ?? loaded.model,
-        allowedTools: entry.allowedTools ?? loaded.allowedTools,
-      });
+      try {
+        const filePath = resolveComponentPath(pluginRoot, entry.source);
+        const loaded = fromMarkdownFile(filePath, name);
+        out.push({
+          ...loaded,
+          description: entry.description ?? loaded.description,
+          argumentHint: entry.argumentHint ?? loaded.argumentHint,
+          model: entry.model ?? loaded.model,
+          allowedTools: entry.allowedTools ?? loaded.allowedTools,
+        });
+      } catch (cause) {
+        warn(`skipping command "${name}": ${cause instanceof Error ? cause.message : cause}`);
+      }
       continue;
     }
     if (typeof entry.content === "string") {

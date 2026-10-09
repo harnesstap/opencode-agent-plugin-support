@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { frontmatterString, parseFrontmatter, parseYamlBoolean } from "./frontmatter.js";
 import { isDirectory, isFile, walkFiles } from "./fs-utils.js";
+import { warn } from "./log.js";
 import { asPathList, type PluginManifest, resolveComponentPath } from "./manifest.js";
 
 export type SkillInvocation = "both" | "user-only" | "model-only" | "hidden";
@@ -18,7 +19,6 @@ export type LoadedSkill = {
   disableModelInvocation: boolean;
 };
 
-const SKILL_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const ARGUMENT_PLACEHOLDER = /\$ARGUMENTS(?:\[\d+\])?|\$\d+\b/;
 
 export function skillSearchRoots(pluginRoot: string, manifest: PluginManifest): string[] {
@@ -50,8 +50,15 @@ export function loadSkills(pluginRoot: string, manifest: PluginManifest): Loaded
       const key = path.resolve(filePath);
       if (seen.has(key)) continue;
       seen.add(key);
-      const raw = fs.readFileSync(filePath, "utf8");
-      const { data, body } = parseFrontmatter(raw);
+      let data: Record<string, unknown>;
+      let body: string;
+      try {
+        const raw = fs.readFileSync(filePath, "utf8");
+        ({ data, body } = parseFrontmatter(raw));
+      } catch (cause) {
+        warn(`skipping skill ${filePath}: ${cause instanceof Error ? cause.message : cause}`);
+        continue;
+      }
       const dir = path.dirname(filePath);
       const fromFm = typeof data.name === "string" ? data.name : undefined;
       const name = fromFm || path.basename(dir);
@@ -80,10 +87,6 @@ function listingDescription(data: Record<string, unknown>): string {
   const description = typeof data.description === "string" ? data.description : "";
   const whenToUse = frontmatterString(data, "when_to_use", "whenToUse");
   return [description, whenToUse].filter(Boolean).join(" ");
-}
-
-export function isOpenCodeSkillName(name: string): boolean {
-  return name.length >= 1 && name.length <= 64 && SKILL_NAME.test(name);
 }
 
 export function skillInvocation(skill: LoadedSkill): SkillInvocation {

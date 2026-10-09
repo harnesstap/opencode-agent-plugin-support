@@ -1,0 +1,126 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Git tag to publish (for example v0.1.0)
+        required: false
+        type: string
+
+# npm Trusted Publishing matches this workflow filename (release.yml).
+# Do not move npm publish into a workflow_call child — OIDC validates the
+# calling workflow name. Mirror: harnesstap/harnesstap .github/workflows/release.yml
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Fetch tags
+        run: git fetch origin --tags
+
+      - name: Set up Node for npm publish
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Resolve release tag
+        id: resolve
+        run: |
+          set -euo pipefail
+          EVENT="${{ github.event_name }}"
+          if [ "$EVENT" = "push" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="${{ github.event.inputs.tag }}"
+            if [ -z "$TAG" ]; then
+              TAG="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
+            fi
+            if [ -z "$TAG" ]; then
+              echo "workflow_dispatch requires a tag input or an exact tag on HEAD"
+              exit 1
+            fi
+          fi
+          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG does not exist"
+            exit 1
+          fi
+          git checkout --force "$TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag matches package.json
+        run: |
+          set -euo pipefail
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${{ steps.resolve.outputs.tag }}"
+          TAG_VERSION="${TAG_VERSION#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "package.json version ($PKG_VERSION) does not match tag ($TAG_VERSION)"
+            exit 1
+          fi
+
+      - name: Build and test
+        run: |
+          npm run build
+          npm test
+
+      # OIDC trusted publishing (no NPM_TOKEN). Provenance is automatic on a
+      # public repo. First publish: npm has no pending publisher for a name that
+      # is not on the registry yet — see CONTRIBUTING.md. To publish 0.1.0 from
+      # CI before the trusted publisher exists, add secret NPM_TOKEN and:
+      #   env:
+      #     NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish to npm
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.resolve.outputs.tag }}"
+          VERSION="${VERSION#v}"
+          NAME="$(node -p "require('./package.json').name")"
+          if npm view "${NAME}@${VERSION}" version >/dev/null 2>&1; then
+            echo "${NAME}@${VERSION} already on npm; skipping publish."
+            exit 0
+          fi
+          npm publish --access public
+
+      - name: Write GitHub release notes
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          python3 <<'PY'
+          import os, pathlib, re
+          tag = os.environ["TAG"]
+          version = tag[1:] if tag.startswith("v") else tag
+          text = pathlib.Path("CHANGELOG.md").read_text()
+          heading = re.compile(rf"^##\s+v?{re.escape(version)}\b.*$", re.M)
+          match = heading.search(text)
+          if not match:
+              body = f"Release {tag}\n"
+          else:
+              rest = text[match.start():]
+              nxt = re.search(r"^##\s+", rest[match.end() - match.start():], re.M)
+              body = (rest[: match.end() - match.start() + nxt.start()] if nxt else rest).strip() + "\n"
+          pathlib.Path("release-notes.md").write_text(body)
+          PY
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.resolve.outputs.tag }}
+          body_path: release-notes.md
+          generate_release_notes: false

@@ -1,7 +1,8 @@
 import { collectContext, firstBlock, runHookGroups, type HookRunResult } from "./hook-runtime.js";
 import { applyConfigPatch } from "./inject.js";
 import { loadBridge, mcpServerIds, type LoadedBridge } from "./runtime.js";
-import { PLUGIN_ID, setup as setupV2, type V2PluginContext } from "./v2.js";
+import { PLUGIN_ID } from "./identity.js";
+import { setup as setupV2, type V2PluginContext } from "./v2.js";
 import { basePayload, hookEnv, looksLikeToolFailure } from "./hook-payload.js";
 import { toClaudeTool } from "./tool-names.js";
 import type { EnabledPlugin } from "./discover.js";
@@ -25,7 +26,7 @@ const pendingSystemContext: string[] = [];
 
 function log(client: PluginInput["client"], message: string, extra?: Record<string, unknown>): void {
   void client?.app?.log?.({
-    body: { service: "opencode-claude-plugins", level: "info", message, extra },
+    body: { service: PLUGIN_ID, level: "info", message, extra },
   });
 }
 
@@ -154,6 +155,9 @@ export async function createClaudeCodeBridge(input: PluginInput) {
       );
       for (const result of results) {
         if (result.updatedInput) Object.assign(output.args, result.updatedInput);
+      }
+      if (results.some((result) => result.timedOut)) {
+        throw new Error(`PreToolUse hook timed out (fail-closed) for ${mapped}`);
       }
       const blocked = firstBlock(results);
       if (blocked) {

@@ -29,7 +29,13 @@ export function parseFrontmatter<T extends Record<string, unknown> = Record<stri
 }
 
 function parseYamlObject<T extends Record<string, unknown>>(yamlText: string): T {
-  const parsed = YAML.parse(yamlText) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = YAML.parse(yamlText) as unknown;
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    throw new Error(`malformed YAML frontmatter: ${detail}`);
+  }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {} as T;
   return parsed as T;
 }

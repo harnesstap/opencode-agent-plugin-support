@@ -1,7 +1,6 @@
 import type { EnabledPlugin } from "./discover.js";
 import { namespaced } from "./discover.js";
 import { mapClaudeModel } from "./agents.js";
-import { claudeToolsToOpenCodeMap } from "./tool-names.js";
 import {
   ensureArgumentsPlaceholder,
   isSkillModelInvocable,
@@ -146,10 +145,6 @@ export function applyConfigPatch(config: Record<string, unknown>, patch: OpenCod
 function asObject(value: unknown): Record<string, unknown> | undefined {
   if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
   return undefined;
-}
-
-export function commandToolsHint(allowedTools: string[] | undefined): Record<string, boolean> | undefined {
-  return claudeToolsToOpenCodeMap(allowedTools);
 }
 
 /** V2 MCP config uses `disabled` instead of V1 `enabled`. */

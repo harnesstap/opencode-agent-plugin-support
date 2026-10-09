@@ -1,8 +1,12 @@
 {
-  "name": "opencode-claude-plugins",
+  "name": "@harnesstap/opencode-agent-plugin-support",
   "version": "0.1.0",
   "description": "OpenCode plugin that loads and runs Claude Code plugins as native OpenCode skills, commands, agents, MCP servers, instructions, and hooks.",
   "license": "MIT",
+  "author": {
+    "name": "HarnessTap",
+    "url": "https://github.com/harnesstap"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -13,12 +17,17 @@
     }
   },
   "bin": {
-    "opencode-claude-plugins": "./dist/cli.js"
+    "opencode-agent-plugin-support": "./dist/cli.js"
   },
   "files": [
     "dist",
     "index.js",
-    "README.md"
+    "README.md",
+    "ARCHITECTURE.md",
+    "CONTRIBUTING.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=18"
@@ -37,6 +46,10 @@
   "homepage": "https://github.com/harnesstap/opencode-agent-plugin-support#readme",
   "bugs": {
     "url": "https://github.com/harnesstap/opencode-agent-plugin-support/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "keywords": [
     "opencode",

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -63,7 +64,9 @@ export function cacheDir(paths: RuntimePaths): string {
 
 export function pluginDataDir(paths: RuntimePaths, pluginId: string): string {
   const slug = pluginId.replace(/[^A-Za-z0-9_-]/g, "-");
-  return path.join(pluginsDir(paths), "data", slug);
+  const dir = path.join(pluginsDir(paths), "data", slug);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
 export function versionedCachePath(
