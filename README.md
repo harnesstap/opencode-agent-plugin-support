@@ -57,6 +57,8 @@ Options (object form):
 
 `extraPluginDirs` loads extra Claude plugin trees without writing a registry. `skipInstalled` skips `~/.agents/plugins/installed_plugins.json`.
 
+On OpenCode **2.0.24**, a local `{ "package": "/abs/path", "options": { … } }` entry is collapsed to the directory string and **options are dropped**. Prefer `install-local` (or `~/.agents/plugins/installed_plugins.json`) for Claude plugins, and list this package as a directory/`opencode-claude-plugins` spec. Options on a published npm plugin were not re-tested on that build.
+
 ### OpenCode v1
 
 ```json

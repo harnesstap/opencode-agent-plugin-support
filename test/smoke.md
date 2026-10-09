@@ -33,6 +33,18 @@ opencode --version
 # opencode service restart
 ```
 
+On OpenCode 2.0.24 a local `{ package, options }` entry is flattened to the directory string (options dropped). The reliable smoke path is `plugins: ["/abs/this-repo"]` plus `install-local` of the fixture (isolated `HOME` if you do not want to touch a real registry).
+
+Verified on **OpenCode 2.0.24** (`@opencode/cli`) in this environment with `opencode serve` + authenticated `/api/*`:
+
+- `GET /api/plugin` — `opencode-claude-plugins` `state.status=active`, source `local` `/…/index.js` (no v1 SchemaError)
+- `GET /api/skill` — `demo-skill`
+- `GET /api/command` — `fixture-demo:hello`
+- `GET /api/mcp` — `fixture-demo:echo-api` and `fixture-demo:fixture-stdio` registered (`${CLAUDE_PLUGIN_ROOT}` expanded; fixture process exits by design)
+- `GET /api/agent` / `opencode debug agents` — `fixture-demo:reviewer` `mode: subagent` with the markdown `system` prompt (via `agent.update`, no files copied)
+
+Hook block/rewrite/`patch`→Edit were covered by mocked `setup(ctx)` tests, not a model-backed TUI session.
+
 Then start OpenCode in that directory (or `opencode serve` / `opencode api get /api/plugin` if those exist on your build) and check:
 
 1. Plugin `opencode-claude-plugins` is active (not a SchemaError about `default`).
