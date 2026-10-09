@@ -1,8 +1,12 @@
 # opencode-claude-plugins
 
-Loads **Claude Code plugins** into OpenCode as native skills, slash commands, subagents, MCP servers, instructions, and lifecycle hooks. Plugin files stay where they are; nothing is copied into `.opencode/` or `~/.agents/skills`.
+[![CI](https://github.com/harnesstap/opencode-agent-plugin-support/actions/workflows/ci.yml/badge.svg)](https://github.com/harnesstap/opencode-agent-plugin-support/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![OpenCode](https://img.shields.io/badge/OpenCode-v2%20%7C%20v1%20%E2%89%A51.18.29-0ea5e9)](#compatibility)
+[![Claude Code](https://img.shields.io/badge/Claude%20Code-plugins%20compatible-7c3aed)](#compatibility)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
-**OpenCode v2 is the primary target.** A v1 `server()` export remains for OpenCode 1.18.29+. v2 does not run v1 plugin implementations.
+Loads **Claude Code plugins** into OpenCode as native skills, slash commands, subagents, MCP servers, instructions, and lifecycle hooks. Plugin files stay where they are; nothing is copied into `.opencode/` or `~/.agents/skills`.
 
 ## Install
 
@@ -69,6 +73,10 @@ On OpenCode **2.0.24**, a local `{ "package": "/abs/path", "options": { … } }`
 ```
 
 Needs OpenCode **1.18.29+** (object entrypoint with `server()`). Older v1 hosts expected a default function export.
+
+### Compatibility
+
+OpenCode **v2** is the primary target. A v1 `server()` export remains for OpenCode 1.18.29+. v2 does not run v1 plugin implementations.
 
 ### Share Claude Code’s plugin cache
 
