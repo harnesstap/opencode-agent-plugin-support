@@ -121,8 +121,19 @@ describe("v2 default export", () => {
 
     await plugin.setup(ctx);
 
-    expect(skills.map((s) => s.id)).toContain("demo-skill");
+    expect(skills.map((s) => s.id)).toEqual(expect.arrayContaining(["demo-skill", "legacy-context", "hello"]));
+    expect(skills.map((s) => s.id)).not.toContain("manual-deploy");
     expect(commands.map((c) => c.name)).toContain("fixture-demo:hello");
+    expect(commands.map((c) => c.name)).toContain("fixture-demo:demo-skill");
+    expect(commands.map((c) => c.name)).toContain("fixture-demo:manual-deploy");
+    expect(commands.map((c) => c.name)).not.toContain("fixture-demo:legacy-context");
+    const demoSkillCmd = commands.find((c) => c.name === "fixture-demo:demo-skill");
+    expect(String(demoSkillCmd?.template)).toContain("fixture-skill-ok");
+    expect(String(demoSkillCmd?.template)).toContain("$ARGUMENTS");
+    const helloCmd = commands.find((c) => c.name === "fixture-demo:hello");
+    expect(String(helloCmd?.template)).toContain("fixture-command-ok");
+    expect(helloCmd?.argumentHint).toBe("[name]");
+    expect(commands.find((c) => c.name === "fixture-demo:manual-deploy")?.argumentHint).toBe("[target]");
     expect(mcp.get("fixture-demo:echo-api")?.type).toBe("local");
     expect(mcp.get("fixture-demo:echo-api")?.disabled).toBe(false);
     expect(agents.get("fixture-demo:reviewer")?.mode).toBe("subagent");

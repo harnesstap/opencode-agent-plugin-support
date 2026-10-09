@@ -39,7 +39,7 @@ Verified on **OpenCode 2.0.24** (`@opencode/cli`) in this environment with `open
 
 - `GET /api/plugin` — `opencode-claude-plugins` `state.status=active`, source `local` `/…/index.js` (no v1 SchemaError)
 - `GET /api/skill` — `demo-skill`
-- `GET /api/command` — `fixture-demo:hello`
+- `GET /api/command` — `fixture-demo:hello`, `fixture-demo:demo-skill`, `fixture-demo:manual-deploy` (not `fixture-demo:legacy-context`)
 - `GET /api/mcp` — `fixture-demo:echo-api` and `fixture-demo:fixture-stdio` registered (`${CLAUDE_PLUGIN_ROOT}` expanded; fixture process exits by design)
 - `GET /api/agent` / `opencode debug agents` — `fixture-demo:reviewer` `mode: subagent` with the markdown `system` prompt (via `agent.update`, no files copied)
 
@@ -48,7 +48,7 @@ Hook block/rewrite/`patch`→Edit were covered by mocked `setup(ctx)` tests, not
 Then start OpenCode in that directory (or `opencode serve` / `opencode api get /api/plugin` if those exist on your build) and check:
 
 1. Plugin `opencode-claude-plugins` is active (not a SchemaError about `default`).
-2. `/fixture-demo:hello world` is a slash command.
+2. `/fixture-demo:hello world` is a slash command. `/fixture-demo:demo-skill` and `/fixture-demo:manual-deploy` are skill commands whose templates include the plugin `SKILL.md` body.
 3. `@fixture-demo:reviewer` is mentionable as a subagent (registered via `agent.update`, not copied files).
 4. `skill` tool lists `demo-skill`.
 5. MCP `fixture-demo:echo-api` is in config (`disabled: false`; the fixture server exits immediately).

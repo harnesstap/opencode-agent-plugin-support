@@ -33,8 +33,8 @@ v2 has no mutable global config object.
 
 | Claude component | v2 API | Behavior |
 | --- | --- | --- |
-| `skills/*/SKILL.md` | `ctx.skill.transform` `editor.add` | `{ id, name, description?, path, content }`. Not namespaced (kebab-case only). |
-| `commands/*.md` | `ctx.command.transform` `editor.add` | Native slash commands. Executor substitutes `$ARGUMENTS` and calls `ctx.session.prompt`. |
+| `skills/*/SKILL.md` | `ctx.skill.transform` `editor.add` | `{ id, name, description?, path, content }`. Not namespaced (kebab-case only). Skipped when `disable-model-invocation` is set. Also registered as `/plugin:skill` commands (see Commands). |
+| `commands/*.md` | `ctx.command.transform` `editor.add` | Native slash commands, plus user-invocable plugin skills as `plugin:skill`. Executor substitutes `$ARGUMENTS` and calls `ctx.session.prompt`. |
 | `agents/*.md` | `ctx.agent.transform` | See **Agents** below. |
 | `.mcp.json` / `mcpServers` | `ctx.mcp.transform` `editor.set` | Native MCP. v2 field is `disabled` (not `enabled`). |
 | `CLAUDE.md` / … | `ctx.session.hook("context")` | Push instruction texts onto `event.system` **every** model call (v2 context is not persisted). |
@@ -47,21 +47,21 @@ The `config` hook runs at plugin init and mutates the live config object:
 
 | Claude component | OpenCode field | Behavior |
 | --- | --- | --- |
-| `skills/*/SKILL.md` | `config.skills.paths` (or `config.skills` if it is already a string array) | Same discovery as `.agents/skills`. |
-| `commands/*.md` | `config.command["plugin:name"]` | Native slash commands. |
+| `skills/*/SKILL.md` | `config.skills.paths` (or `config.skills` if it is already a string array) | Same discovery as `.agents/skills`. Paths omitted for `disable-model-invocation` skills. |
+| `commands/*.md` | `config.command["plugin:name"]` | Native slash commands, plus `plugin:skill` for each user-invocable plugin skill. |
 | `agents/*.md` | `config.agent["plugin:name"]` | `mode: "subagent"`. |
 | `.mcp.json` / `mcpServers` | `config.mcp["plugin:name"]` | Native MCP (`type: local \| remote`, `enabled`). |
 | `CLAUDE.md` / … | `config.instructions` + `experimental.chat.system.transform` | File paths plus inlined text. |
 | `hooks/hooks.json` | mapped plugin hooks | Command hooks only. |
 | `bin/` | `shell.env` `PATH` | Prepended while enabled. |
 
-Skill **names** stay the `SKILL.md` folder names. OpenCode skill ids cannot contain `:`, so they are not namespaced as `plugin:skill`. Commands, agents, and MCP servers **are** namespaced as `plugin:component`.
+Skill **ids** stay the `SKILL.md` folder names (OpenCode skill ids cannot contain `:`). Each user-invocable plugin skill is also a slash command named `plugin:skill` (for example `/code-review-workflow:request-slack-review`). That command inlines the plugin file so a colliding user skill in `~/.config/opencode/skills` cannot replace it. If the plugin already defines a command with the same namespaced id, that command wins. Commands, agents, and MCP servers **are** namespaced as `plugin:component`.
 
 ### Component mapping details
 
-- **Skills:** Frontmatter `name` + `description` are required by OpenCode. Search roots: `skills/`, manifest `skills` paths, or a root-level `SKILL.md`.
+- **Skills:** Frontmatter `name` + `description` are required by OpenCode. Search roots: `skills/`, manifest `skills` paths, or a root-level `SKILL.md`. Claude fields: `user-invocable` (default true; `false` skips the slash command), `disable-model-invocation` (keeps `/plugin:skill` but does not advertise the skill to the model), `argument-hint` (copied onto the command), `when_to_use` (appended to the listing description). Boolean frontmatter accepts Claude's `yes`/`no`/`on`/`off`/`1`/`0`. If frontmatter `name` already starts with `plugin:`, the prefix is not doubled.
 - **MCP:** `${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_PLUGIN_DATA}`, `${CLAUDE_PROJECT_DIR}`, and `$ENV` expanded. stdio / `command` → `type: "local"`; `url` / `http` / `sse` / `ws` → `type: "remote"`. `.mcpb` bundles are not unpacked. `${user_config.*}` expands only when `userConfig` is passed in.
-- **Commands:** Markdown files plus inline `plugin.json` maps. `$ARGUMENTS` is preserved.
+- **Commands:** Markdown files plus inline `plugin.json` maps, then plugin skills as `/plugin:skill`. `$ARGUMENTS` is preserved. Skill-command templates include the plugin `SKILL.md` path and body (and expand `${CLAUDE_SKILL_DIR}` / `${CLAUDE_PLUGIN_ROOT}`).
 - **Instructions:** Claude itself does **not** load plugin-root `CLAUDE.md`; we still do because it is the natural OpenCode mapping.
 - **Agents (v1):** `description`; `tools` / `disallowedTools` → OpenCode `tools` booleans; `model` aliases (`haiku` / `sonnet` / `opus`) or `provider/model`. Plugin-agent `hooks` / `mcpServers` / `permissionMode` ignored.
 

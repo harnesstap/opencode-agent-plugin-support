@@ -8,7 +8,7 @@ import { loadCommands } from "../src/commands.js";
 import { discoverEnabledPlugins, loadPluginFromDirectory } from "../src/discover.js";
 import { isPluginEnabled, loadActivation, parsePluginId, resolvePluginEnablement, setLayerEnabled } from "../src/enablement.js";
 import { expandString } from "../src/expand.js";
-import { parseFrontmatter, splitList } from "../src/frontmatter.js";
+import { parseFrontmatter, parseYamlBoolean, splitList } from "../src/frontmatter.js";
 import { interpretHookResult, matchingHandlers, runHookCommand } from "../src/hook-runtime.js";
 import { parseHooksObject } from "../src/hooks.js";
 import { parseInstalledPluginsDatabase, pickInstallation, resolveInstallPath } from "../src/installed.js";
@@ -17,7 +17,13 @@ import { createClaudeCodeBridge } from "../src/index.js";
 import { loadManifestFromRoot, resolveComponentPath } from "../src/manifest.js";
 import { loadMcpServers } from "../src/mcp.js";
 import { writesThroughClaudePluginRegistry } from "../src/registry-guard.js";
-import { loadSkills } from "../src/skills.js";
+import {
+  isSkillModelInvocable,
+  isSkillUserInvocable,
+  loadSkills,
+  pluginSkillCommandName,
+  pluginSkillCommandTemplate,
+} from "../src/skills.js";
 import { matcherHits, toClaudeMcpTool, toClaudeTool, toOpenCodeTool } from "../src/tool-names.js";
 
 const temps: string[] = [];
@@ -45,6 +51,11 @@ describe("frontmatter", () => {
   it("splits tool lists", () => {
     expect(splitList("Read, Grep, Glob")).toEqual(["Read", "Grep", "Glob"]);
     expect(splitList(["Read", "Bash"])).toEqual(["Read", "Bash"]);
+  });
+
+  it("parses Claude-style YAML booleans", () => {
+    expect(parseYamlBoolean("yes", false)).toBe(true);
+    expect(parseYamlBoolean("0", true)).toBe(false);
   });
 });
 
@@ -260,7 +271,9 @@ describe("fixture plugin components", () => {
       cwd: tmp(),
       env: { ...process.env, FIXTURE_TOKEN: "tok" },
     });
-    expect(plugin.skills.map((s) => s.name)).toContain("demo-skill");
+    expect(plugin.skills.map((s) => s.name)).toEqual(
+      expect.arrayContaining(["demo-skill", "manual-deploy", "legacy-context", "hello"]),
+    );
     expect(plugin.commands.map((c) => c.name)).toContain("hello");
     expect(plugin.commands[0]?.template).toContain("$ARGUMENTS");
     expect(plugin.agents.map((a) => a.name)).toContain("reviewer");
@@ -285,6 +298,19 @@ describe("fixture plugin components", () => {
     });
     const patch = buildConfigPatch([plugin]);
     expect(patch.command["fixture-demo:hello"]?.template).toContain("$ARGUMENTS");
+    expect(patch.command["fixture-demo:hello"]?.template).toContain("fixture-command-ok");
+    expect(patch.command["fixture-demo:hello"]?.template).not.toContain("fixture-skill-hello-should-not-win");
+    expect(patch.command["fixture-demo:demo-skill"]?.template).toContain("fixture-skill-ok");
+    expect(patch.command["fixture-demo:demo-skill"]?.template).toContain("$ARGUMENTS");
+    expect(patch.command["fixture-demo:demo-skill"]?.template).toContain(
+      path.join("skills", "demo-skill", "SKILL.md"),
+    );
+    expect(patch.command["fixture-demo:manual-deploy"]?.template).toContain("fixture-manual-deploy-ok");
+    expect(patch.command["fixture-demo:manual-deploy"]?.argumentHint).toBe("[target]");
+    expect(patch.command["fixture-demo:legacy-context"]).toBeUndefined();
+    expect(patch.skillNames).toEqual(expect.arrayContaining(["demo-skill", "legacy-context", "hello"]));
+    expect(patch.skillNames).not.toContain("manual-deploy");
+    expect(patch.skillPaths.some((dir) => dir.endsWith(`${path.sep}manual-deploy`))).toBe(false);
     expect(patch.agent["fixture-demo:reviewer"]?.mode).toBe("subagent");
     expect(patch.mcp["fixture-demo:echo-api"]).toBeTruthy();
     expect(patch.instructions.some((file) => file.endsWith("CLAUDE.md"))).toBe(true);
@@ -359,7 +385,7 @@ describe("discovery against Claude-compatible layout", () => {
 
     const discovered = discoverEnabledPlugins({ home, cwd, env: process.env });
     expect(discovered.enabled).toHaveLength(1);
-    expect(discovered.enabled[0]?.skills[0]?.name).toBe("demo-skill");
+    expect(discovered.enabled[0]?.skills.map((s) => s.name)).toContain("demo-skill");
     expect(discovered.statuses[0]).toMatchObject({
       id: "fixture-demo@local",
       enabled: true,
@@ -498,6 +524,86 @@ describe("skill path overlap", () => {
     const skills = loadSkills(root, loaded.manifest);
     expect(skills).toHaveLength(1);
     expect(skills[0]?.name).toBe("one");
+  });
+});
+
+describe("plugin skill slash commands", () => {
+  it("parses Claude boolean frontmatter", () => {
+    expect(parseYamlBoolean(true, false)).toBe(true);
+    expect(parseYamlBoolean("YES", false)).toBe(true);
+    expect(parseYamlBoolean("off", true)).toBe(false);
+    expect(parseYamlBoolean(undefined, true)).toBe(true);
+  });
+
+  it("names commands plugin:skill without double-prefixing", () => {
+    expect(pluginSkillCommandName("jenkins", "jenkins-ci")).toBe("jenkins:jenkins-ci");
+    expect(pluginSkillCommandName("code-review-workflow", "request-slack-review")).toBe(
+      "code-review-workflow:request-slack-review",
+    );
+    expect(pluginSkillCommandName("my-plugin", "my-plugin:fancy")).toBe("my-plugin:fancy");
+  });
+
+  it("skips user-invocable:false and hides disable-model-invocation from the skill list", () => {
+    const root = tmp();
+    mkdirSync(path.join(root, ".claude-plugin"), { recursive: true });
+    mkdirSync(path.join(root, "skills", "background"), { recursive: true });
+    mkdirSync(path.join(root, "skills", "deploy"), { recursive: true });
+    mkdirSync(path.join(root, "skills", "hidden"), { recursive: true });
+    writeFileSync(
+      path.join(root, ".claude-plugin", "plugin.json"),
+      JSON.stringify({ name: "acme" }),
+    );
+    writeFileSync(
+      path.join(root, "skills", "background", "SKILL.md"),
+      "---\nname: background\ndescription: ctx\nuser-invocable: false\n---\n\nbg\n",
+    );
+    writeFileSync(
+      path.join(root, "skills", "deploy", "SKILL.md"),
+      "---\nname: deploy\ndescription: ship\ndisable-model-invocation: true\nargument-hint: \"[env]\"\n---\n\nShip it. Supporting ${CLAUDE_SKILL_DIR}/notes.md\n",
+    );
+    writeFileSync(
+      path.join(root, "skills", "hidden", "SKILL.md"),
+      "---\nname: hidden\ndescription: both\nuser-invocable: false\ndisable-model-invocation: true\n---\n\nnone\n",
+    );
+    const plugin = loadPluginFromDirectory(root, "acme@local", { home: tmp(), cwd: tmp(), env: process.env });
+    const background = plugin.skills.find((s) => s.name === "background");
+    const deploy = plugin.skills.find((s) => s.name === "deploy");
+    const hidden = plugin.skills.find((s) => s.name === "hidden");
+    expect(background && isSkillUserInvocable(background)).toBe(false);
+    expect(background && isSkillModelInvocable(background)).toBe(true);
+    expect(deploy && isSkillUserInvocable(deploy)).toBe(true);
+    expect(deploy && isSkillModelInvocable(deploy)).toBe(false);
+    expect(hidden && isSkillUserInvocable(hidden)).toBe(false);
+    expect(hidden && isSkillModelInvocable(hidden)).toBe(false);
+
+    const patch = buildConfigPatch([plugin]);
+    expect(patch.command["acme:background"]).toBeUndefined();
+    expect(patch.command["acme:hidden"]).toBeUndefined();
+    expect(patch.command["acme:deploy"]?.argumentHint).toBe("[env]");
+    expect(patch.command["acme:deploy"]?.template).toContain(path.join(root, "skills", "deploy", "notes.md"));
+    expect(patch.command["acme:deploy"]?.template).toContain(path.join(root, "skills", "deploy", "SKILL.md"));
+    expect(patch.skillNames).toEqual(["background"]);
+    expect(patch.skillPaths).toEqual([path.join(root, "skills", "background")]);
+  });
+
+  it("inlines the plugin SKILL.md so a colliding user skill name cannot replace it", () => {
+    const root = tmp();
+    mkdirSync(path.join(root, ".claude-plugin"), { recursive: true });
+    mkdirSync(path.join(root, "skills", "summarize"), { recursive: true });
+    writeFileSync(path.join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "ops" }));
+    writeFileSync(
+      path.join(root, "skills", "summarize", "SKILL.md"),
+      "---\nname: summarize\ndescription: plugin copy\n---\n\nPLUGIN_COPY_BODY\n",
+    );
+    const plugin = loadPluginFromDirectory(root, "ops@local", { home: tmp(), cwd: tmp(), env: process.env });
+    const skill = plugin.skills[0]!;
+    const template = pluginSkillCommandTemplate(plugin.name, plugin.pluginRoot, skill);
+    expect(template).toContain("PLUGIN_COPY_BODY");
+    expect(template).toContain(skill.filePath);
+    expect(template).toContain("$ARGUMENTS");
+    expect(template).not.toContain("opencode/skills");
+    const patch = buildConfigPatch([plugin]);
+    expect(patch.command["ops:summarize"]?.template).toBe(template);
   });
 });
 
