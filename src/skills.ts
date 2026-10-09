@@ -34,11 +34,16 @@ export function skillSearchRoots(pluginRoot: string, manifest: PluginManifest): 
 
 export function loadSkills(pluginRoot: string, manifest: PluginManifest): LoadedSkill[] {
   const skills: LoadedSkill[] = [];
+  const seen = new Set<string>();
   for (const root of skillSearchRoots(pluginRoot, manifest)) {
     const files = isFile(path.join(root, "SKILL.md"))
       ? [path.join(root, "SKILL.md")]
       : walkFiles(root, (file) => path.basename(file) === "SKILL.md");
     for (const filePath of files) {
+      // manifest `skills` paths often overlap the default skills/ dir
+      const key = path.resolve(filePath);
+      if (seen.has(key)) continue;
+      seen.add(key);
       const raw = fs.readFileSync(filePath, "utf8");
       const { data, body } = parseFrontmatter(raw);
       const dir = path.dirname(filePath);

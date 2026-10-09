@@ -1,14 +1,11 @@
-import { discoverEnabledPlugins, type EnabledPlugin } from "./discover.js";
-import {
-  collectContext,
-  firstBlock,
-  runHookGroups,
-  type HookRunResult,
-} from "./hook-runtime.js";
-import { applyConfigPatch, buildConfigPatch } from "./inject.js";
-import { defaultRuntimePaths, type RuntimePaths } from "./paths.js";
+import { collectContext, firstBlock, runHookGroups, type HookRunResult } from "./hook-runtime.js";
+import { applyConfigPatch } from "./inject.js";
+import { loadBridge, mcpServerIds, type LoadedBridge } from "./runtime.js";
+import { PLUGIN_ID, setup as setupV2, type V2PluginContext } from "./v2.js";
 import { basePayload, hookEnv, looksLikeToolFailure } from "./hook-payload.js";
 import { toClaudeTool } from "./tool-names.js";
+import type { EnabledPlugin } from "./discover.js";
+import type { RuntimePaths } from "./paths.js";
 
 export type PluginInput = {
   directory?: string;
@@ -18,6 +15,7 @@ export type PluginInput = {
     app?: { log?: (input: unknown) => Promise<unknown> };
     tui?: { showToast?: (input: unknown) => Promise<unknown> };
   };
+  options?: unknown;
 };
 
 type TextPart = { type: "text"; text: string; [key: string]: unknown };
@@ -59,16 +57,19 @@ function appendTextPart(parts: unknown, text: string): unknown {
   return [...parts, { type: "text", text } satisfies TextPart];
 }
 
+function claudeTool(tool: string, plugins: EnabledPlugin[]): string {
+  return toClaudeTool(tool, mcpServerIds(plugins));
+}
+
 export async function createClaudeCodeBridge(input: PluginInput) {
-  const paths = defaultRuntimePaths({
+  const loaded = loadBridge({
     cwd: input.directory ?? input.worktree ?? process.cwd(),
+    options: input.options,
   });
-  const discovered = discoverEnabledPlugins(paths);
-  const plugins = discovered.enabled;
-  const patch = buildConfigPatch(plugins);
+  const { plugins, patch, paths } = loaded;
   log(input.client, `loaded ${plugins.length} Claude Code plugin(s)`, {
     plugins: plugins.map((plugin) => plugin.id),
-    skipped: discovered.skipped,
+    skipped: loaded.skipped,
   });
 
   return {
@@ -80,10 +81,16 @@ export async function createClaudeCodeBridge(input: PluginInput) {
       const sessionID = String(event.properties?.sessionID ?? event.properties?.id ?? "");
       if (type === "session.created") {
         sessionStarted.add(sessionID);
-        const results = runAll(plugins, "SessionStart", { session_id: sessionID, source: "startup" }, paths);
+        const results = runAll(
+          plugins,
+          "SessionStart",
+          { session_id: sessionID, source: "startup" },
+          paths,
+          "startup",
+        );
         pendingSystemContext.push(...collectContext(results));
       } else if (type === "session.deleted") {
-        runAll(plugins, "SessionEnd", { session_id: sessionID, reason: "clear" }, paths);
+        runAll(plugins, "SessionEnd", { session_id: sessionID, reason: "clear" }, paths, "clear");
         sessionStarted.delete(sessionID);
       } else if (type === "session.idle") {
         const results = runAll(plugins, "Stop", { session_id: sessionID, stop_hook_active: true }, paths);
@@ -97,7 +104,13 @@ export async function createClaudeCodeBridge(input: PluginInput) {
       const sessionID = inputArgs.sessionID ?? "";
       if (sessionID && !sessionStarted.has(sessionID)) {
         sessionStarted.add(sessionID);
-        const startResults = runAll(plugins, "SessionStart", { session_id: sessionID, source: "startup" }, paths);
+        const startResults = runAll(
+          plugins,
+          "SessionStart",
+          { session_id: sessionID, source: "startup" },
+          paths,
+          "startup",
+        );
         pendingSystemContext.push(...collectContext(startResults));
       }
       const prompt =
@@ -126,41 +139,41 @@ export async function createClaudeCodeBridge(input: PluginInput) {
       hookInput: { tool: string; sessionID: string; callID: string },
       output: { args: Record<string, unknown> },
     ) => {
-      const claudeTool = toClaudeTool(hookInput.tool);
+      const mapped = claudeTool(hookInput.tool, plugins);
       const results = runAll(
         plugins,
         "PreToolUse",
         {
           session_id: hookInput.sessionID,
-          tool_name: claudeTool,
+          tool_name: mapped,
           tool_input: output.args,
           tool_use_id: hookInput.callID,
         },
         paths,
-        claudeTool,
+        mapped,
       );
       for (const result of results) {
         if (result.updatedInput) Object.assign(output.args, result.updatedInput);
       }
       const blocked = firstBlock(results);
       if (blocked) {
-        throw new Error(blocked.blockReason ?? `Blocked by PreToolUse hook (${claudeTool})`);
+        throw new Error(blocked.blockReason ?? `Blocked by PreToolUse hook (${mapped})`);
       }
     },
     "tool.execute.after": async (
       hookInput: { tool: string; sessionID: string; callID: string; args: unknown },
       output: { title: string; output: string; metadata: unknown },
     ) => {
-      const claudeTool = toClaudeTool(hookInput.tool);
+      const mapped = claudeTool(hookInput.tool, plugins);
       const payload = {
         session_id: hookInput.sessionID,
-        tool_name: claudeTool,
+        tool_name: mapped,
         tool_input: hookInput.args,
         tool_response: output.output,
         tool_use_id: hookInput.callID,
       };
       const event = looksLikeToolFailure(output) ? "PostToolUseFailure" : "PostToolUse";
-      const results = runAll(plugins, event, payload, paths, claudeTool);
+      const results = runAll(plugins, event, payload, paths, mapped);
       const extra = collectContext(results);
       if (extra.length) output.output = `${output.output}\n\n${extra.join("\n\n")}`;
     },
@@ -169,29 +182,29 @@ export async function createClaudeCodeBridge(input: PluginInput) {
       output: { status: "ask" | "deny" | "allow" },
     ) => {
       const tool = String(permInput.permission ?? permInput.type ?? "");
-      const claudeTool = toClaudeTool(tool);
+      const mapped = claudeTool(tool, plugins);
       const results = [
         ...runAll(
           plugins,
           "PermissionRequest",
           {
             session_id: permInput.sessionID ?? "",
-            tool_name: claudeTool,
+            tool_name: mapped,
             tool_input: { patterns: permInput.patterns },
           },
           paths,
-          claudeTool,
+          mapped,
         ),
         ...runAll(
           plugins,
           "PreToolUse",
           {
             session_id: permInput.sessionID ?? "",
-            tool_name: claudeTool,
+            tool_name: mapped,
             tool_input: { patterns: permInput.patterns },
           },
           paths,
-          claudeTool,
+          mapped,
         ),
       ];
       if (results.some((result) => result.permissionDecision === "deny" || result.blocked)) {
@@ -204,13 +217,16 @@ export async function createClaudeCodeBridge(input: PluginInput) {
       hookInput: { sessionID?: string },
       output: { context: string[]; prompt?: string },
     ) => {
-      const results = runAll(plugins, "PreCompact", { session_id: hookInput.sessionID ?? "", trigger: "auto" }, paths);
+      const results = runAll(
+        plugins,
+        "PreCompact",
+        { session_id: hookInput.sessionID ?? "", trigger: "auto" },
+        paths,
+        "auto",
+      );
       output.context.push(...collectContext(results));
     },
-    "experimental.chat.system.transform": async (
-      _hookInput: unknown,
-      output: { system: string[] },
-    ) => {
+    "experimental.chat.system.transform": async (_hookInput: unknown, output: { system: string[] }) => {
       if (patch.instructionTexts.length) output.system.push(...patch.instructionTexts);
       if (pendingSystemContext.length) {
         output.system.push(...pendingSystemContext);
@@ -227,7 +243,27 @@ export async function createClaudeCodeBridge(input: PluginInput) {
   };
 }
 
-const ClaudeCodePlugins = async (input: PluginInput) => createClaudeCodeBridge(input);
+/** V1 plugin function (also `default.server`). */
+export async function ClaudeCodePlugins(input: PluginInput) {
+  return createClaudeCodeBridge(input);
+}
 
-export default ClaudeCodePlugins;
-export { ClaudeCodePlugins };
+async function setup(ctx: V2PluginContext) {
+  const directory = ctx.location?.directory ?? process.cwd();
+  const bridge: LoadedBridge = loadBridge({ cwd: directory, options: ctx.options });
+  return setupV2(ctx, bridge);
+}
+
+/**
+ * Dual V1/V2 entrypoint.
+ * V2 reads `{ id, setup }`. V1 (1.18.29+) calls `server()`.
+ */
+const plugin = {
+  id: PLUGIN_ID,
+  setup,
+  server: ClaudeCodePlugins,
+};
+
+export default plugin;
+export { plugin, PLUGIN_ID, setup };
+export type { V2PluginContext };

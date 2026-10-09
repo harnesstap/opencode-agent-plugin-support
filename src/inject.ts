@@ -132,3 +132,22 @@ function asObject(value: unknown): Record<string, unknown> | undefined {
 export function commandToolsHint(allowedTools: string[] | undefined): Record<string, boolean> | undefined {
   return claudeToolsToOpenCodeMap(allowedTools);
 }
+
+/** V2 MCP config uses `disabled` instead of V1 `enabled`. */
+export function toV2McpConfig(spec: unknown, mcpDisabled: boolean): Record<string, unknown> {
+  if (!spec || typeof spec !== "object" || Array.isArray(spec)) return { disabled: mcpDisabled };
+  const rec = { ...(spec as Record<string, unknown>) };
+  const enabled = rec.enabled;
+  delete rec.enabled;
+  for (const key of Object.keys(rec)) {
+    if (rec[key] === undefined) delete rec[key];
+  }
+  rec.disabled = enabled === false || mcpDisabled;
+  return rec;
+}
+
+export function splitModelRef(model: string | undefined): { providerID: string; id: string } | undefined {
+  if (!model || !model.includes("/")) return undefined;
+  const slash = model.indexOf("/");
+  return { providerID: model.slice(0, slash), id: model.slice(slash + 1) };
+}

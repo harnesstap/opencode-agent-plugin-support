@@ -1,6 +1,6 @@
 import path from "node:path";
 import { isDirectory, readJsonFile } from "./fs-utils.js";
-import { expandUserPath, installedPluginsPath, type RuntimePaths, versionedCachePath } from "./paths.js";
+import { expandUserPath, installedPluginsPath, pluginsDir, type RuntimePaths, versionedCachePath } from "./paths.js";
 
 export type PluginScope = "user" | "project" | "local" | "managed" | "flag";
 
@@ -116,8 +116,18 @@ export function pickInstallation(
   paths: RuntimePaths,
 ): PluginInstallation | undefined {
   const cwd = path.resolve(paths.cwd);
-  const ranked = [...record.installations].sort((a, b) => rankScope(a, cwd) - rankScope(b, cwd));
-  return ranked[0];
+  const ranked = [...record.installations]
+    // project/local installs only apply inside their own project (Claude semantics)
+    .filter((install) => !isForeignProjectInstall(install, cwd))
+    .sort((a, b) => rankScope(a, cwd) - rankScope(b, cwd));
+  // prefer the best-ranked entry whose directory actually exists
+  return ranked.find((install) => resolveExistingInstallPath(record, install, paths)) ?? ranked[0];
+}
+
+function isForeignProjectInstall(install: PluginInstallation, cwd: string): boolean {
+  if (install.scope !== "project" && install.scope !== "local") return false;
+  if (!install.projectPath) return false;
+  return path.resolve(install.projectPath) !== cwd;
 }
 
 function rankScope(install: PluginInstallation, cwd: string): number {
@@ -137,7 +147,7 @@ export function resolveInstallPath(
 ): string {
   const expanded = expandUserPath(install.installPath, paths.home);
   if (path.isAbsolute(expanded)) return expanded;
-  return path.resolve(paths.home, expanded);
+  return path.resolve(pluginsDir(paths), expanded);
 }
 
 export function fallbackCachePath(record: InstalledPluginRecord, install: PluginInstallation, paths: RuntimePaths): string {

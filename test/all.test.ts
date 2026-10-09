@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,14 +9,16 @@ import { discoverEnabledPlugins, loadPluginFromDirectory } from "../src/discover
 import { isPluginEnabled, loadActivation, parsePluginId, resolvePluginEnablement, setLayerEnabled } from "../src/enablement.js";
 import { expandString } from "../src/expand.js";
 import { parseFrontmatter, splitList } from "../src/frontmatter.js";
-import { interpretHookResult, runHookCommand } from "../src/hook-runtime.js";
+import { interpretHookResult, matchingHandlers, runHookCommand } from "../src/hook-runtime.js";
 import { parseHooksObject } from "../src/hooks.js";
-import { parseInstalledPluginsDatabase } from "../src/installed.js";
-import { applyConfigPatch, buildConfigPatch } from "../src/inject.js";
+import { parseInstalledPluginsDatabase, pickInstallation, resolveInstallPath } from "../src/installed.js";
+import { applyConfigPatch, buildConfigPatch, toV2McpConfig } from "../src/inject.js";
 import { createClaudeCodeBridge } from "../src/index.js";
 import { loadManifestFromRoot, resolveComponentPath } from "../src/manifest.js";
 import { loadMcpServers } from "../src/mcp.js";
-import { matcherHits, toClaudeTool, toOpenCodeTool } from "../src/tool-names.js";
+import { writesThroughClaudePluginRegistry } from "../src/registry-guard.js";
+import { loadSkills } from "../src/skills.js";
+import { matcherHits, toClaudeMcpTool, toClaudeTool, toOpenCodeTool } from "../src/tool-names.js";
 
 const temps: string[] = [];
 
@@ -182,6 +184,15 @@ describe("tool names", () => {
     expect(toOpenCodeTool("Write")).toBe("write");
     expect(toClaudeTool("bash")).toBe("Bash");
     expect(toClaudeTool("edit")).toBe("Edit");
+    expect(toClaudeTool("shell")).toBe("Bash");
+    expect(toClaudeTool("subagent")).toBe("Task");
+    expect(toClaudeTool("patch")).toBe("Edit");
+    expect(toClaudeMcpTool("fixture-demo_echo-api_echo", ["fixture-demo:echo-api"])).toBe(
+      "mcp__plugin_fixture-demo_echo-api__echo",
+    );
+    expect(toClaudeTool("fixture-demo_echo-api_echo", ["fixture-demo:echo-api"])).toBe(
+      "mcp__plugin_fixture-demo_echo-api__echo",
+    );
     expect(matcherHits("Write|Edit", "Write")).toBe(true);
     expect(matcherHits("Write|Edit", "Bash")).toBe(false);
     expect(matcherHits("*", "Anything")).toBe(true);
@@ -436,6 +447,96 @@ describe("mcp merge", () => {
     });
     expect(mcp.echo?.type).toBe("local");
     if (mcp.echo?.type === "local") expect(mcp.echo.command[0]).toBe("new");
+  });
+});
+
+describe("installed path ranking", () => {
+  it("ignores project installs that belong to other repos and prefers an existing path", () => {
+    const home = tmp();
+    const cwd = tmp();
+    const userDir = path.join(home, ".agents", "plugins", "cache", "local", "demo", "1.0.0");
+    mkdirSync(userDir, { recursive: true });
+    const record = {
+      id: "demo@local",
+      name: "demo",
+      marketplace: "local",
+      installations: [
+        { scope: "project" as const, installPath: "/does-not-exist", projectPath: "/some/other/project" },
+        { scope: "user" as const, installPath: userDir, version: "1.0.0" },
+      ],
+    };
+    const picked = pickInstallation(record, { home, cwd, env: process.env });
+    expect(picked?.scope).toBe("user");
+    expect(picked?.installPath).toBe(userDir);
+  });
+
+  it("resolves relative install paths against the plugins directory", () => {
+    const home = tmp();
+    const resolved = resolveInstallPath(
+      { id: "demo@local", name: "demo", marketplace: "local", installations: [] },
+      { scope: "user", installPath: "cache/local/demo/1.0.0" },
+      { home, cwd: tmp(), env: process.env },
+    );
+    expect(resolved).toBe(path.join(home, ".agents", "plugins", "cache", "local", "demo", "1.0.0"));
+  });
+});
+
+describe("skill path overlap", () => {
+  it("dedupes SKILL.md files when manifest skills overlap skills/", () => {
+    const root = tmp();
+    mkdirSync(path.join(root, ".claude-plugin"), { recursive: true });
+    mkdirSync(path.join(root, "skills", "one"), { recursive: true });
+    writeFileSync(
+      path.join(root, "skills", "one", "SKILL.md"),
+      "---\nname: one\ndescription: d\n---\n\nbody\n",
+    );
+    writeFileSync(
+      path.join(root, ".claude-plugin", "plugin.json"),
+      JSON.stringify({ name: "overlap", skills: ["./skills"] }),
+    );
+    const loaded = loadManifestFromRoot(root, "overlap");
+    const skills = loadSkills(root, loaded.manifest);
+    expect(skills).toHaveLength(1);
+    expect(skills[0]?.name).toBe("one");
+  });
+});
+
+describe("session hook matchers", () => {
+  it("matches SessionStart groups against the session source, not a tool name", () => {
+    const groups = [
+      { matcher: "startup|clear|compact", hooks: [{ type: "command", command: "true" }] },
+    ];
+    expect(matchingHandlers(groups, "startup")).toHaveLength(1);
+    expect(matchingHandlers(groups, "Bash")).toHaveLength(0);
+    expect(matchingHandlers(groups)).toHaveLength(0);
+  });
+});
+
+describe("v2 mcp config", () => {
+  it("maps enabled:false to disabled:true", () => {
+    const mapped = toV2McpConfig({ type: "local", command: ["node"], enabled: false }, false);
+    expect(mapped.disabled).toBe(true);
+    expect(mapped.enabled).toBeUndefined();
+    expect(mapped.command).toEqual(["node"]);
+  });
+});
+
+describe("install-local registry guard", () => {
+  it("detects when ~/.agents/plugins is a symlink into ~/.claude/plugins", () => {
+    const home = tmp();
+    const claude = path.join(home, ".claude", "plugins");
+    const agents = path.join(home, ".agents");
+    mkdirSync(claude, { recursive: true });
+    mkdirSync(agents, { recursive: true });
+    symlinkSync(claude, path.join(agents, "plugins"));
+    expect(writesThroughClaudePluginRegistry({ home, cwd: tmp(), env: process.env })).toBe(true);
+  });
+
+  it("allows a dedicated ~/.agents/plugins directory", () => {
+    const home = tmp();
+    mkdirSync(path.join(home, ".agents", "plugins"), { recursive: true });
+    mkdirSync(path.join(home, ".claude", "plugins"), { recursive: true });
+    expect(writesThroughClaudePluginRegistry({ home, cwd: tmp(), env: process.env })).toBe(false);
   });
 });
 
