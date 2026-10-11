@@ -17,8 +17,16 @@ A root `index.js` re-exports `./dist/index.js` so a **directory** path in v2 `pl
    - Drop `project` / `local` entries whose `projectPath` is a different cwd.
    - Rank remaining: matching-cwd `local` / `project`, then other `local` / `project` without a foreign path, then `user`, `managed`.
    - Prefer the best-ranked entry whose directory exists.
-4. Resolve `installPath` (`~` / `$HOME` expanded). Relative paths are resolved from `~/.agents/plugins/` (not `$HOME`), so Claude’s `cache/...` values work. If that directory is missing, try `cache/<marketplace>/<name>/<version>/`.
-5. Find the plugin root (directory containing `.claude-plugin/plugin.json` or equivalent), load the manifest, hydrate skills / commands / agents / MCP / instructions / hooks.
+4. Resolve the plugin root (`src/plugin-root.ts`), first hit wins. This mirrors Claude Code, which loads relative-path plugins of local marketplaces in place and copies everything else into `cache/`, and sweeps cache dirs it no longer uses:
+   1. **Local marketplace, in place.** If the plugin's marketplace is a `directory` / `file` marketplace (`known_marketplaces.json` `installLocation` or `source.path`, or `extraKnownMarketplaces` in `plugins.json`) and the `marketplace.json` entry has a relative-path `source`, use that directory. It wins over a cache copy because Claude reads it live.
+   2. `installPath` (`~` / `$HOME` expanded). Relative paths are resolved from `~/.agents/plugins/` (not `$HOME`), so Claude’s `cache/...` values work.
+   3. `cache/<marketplace>/<name>/<version>/`.
+   4. **Marketplace tree.** For git-hosted marketplaces, the clone (`installLocation`, `marketplaces/<name>/`, `marketplaces/<repo-slug>/`, or the `marketplaces/<name>.json` file of a `url` marketplace) plus the entry's relative `source`.
+
+   Relative `source` rules (`src/marketplace.ts`): resolved from the marketplace root (the directory containing `.claude-plugin/`); `"."` is the root; a bare name resolves under `metadata.pluginRoot`; `..`, backslashes, and escapes are refused. Object sources (`github`, `url`, `git-subdir`, `npm`, `archive`, `command`) are never resolved from a marketplace tree because only Claude’s cache has them; fetching is Claude’s job.
+
+   When nothing resolves, the plugin is skipped with `plugin root unresolved: ...` listing each place tried. That is logged with `warn` for enabled plugins (`debug` for disabled ones) and shown by `list` (`reason`, `resolvedVia`, `tried`). `OPENCODE_AGENT_PLUGIN_SUPPORT_DEBUG=1` also logs successful resolutions to stderr.
+5. For `installPath` / cache hits, find the plugin root (directory containing `.claude-plugin/plugin.json` or equivalent; marketplace hits are already exact). Load the manifest and merge the marketplace entry (`src/marketplace-entry.ts`): no `plugin.json` → the entry is the manifest; `strict` (default `true`) → the entry's `commands` / `agents` / `skills` / `hooks` are appended (hooks are appended, not replaced per event); `strict: false` with entry components → "Plugin has conflicting manifests"; an entry at the marketplace root (`"."`) that lists `skills` replaces the default `skills/` scan; display fields come from the entry, `version` from the manifest. Then hydrate skills / commands / agents / MCP / instructions / hooks.
 6. Plugin option `extraPluginDirs` (`{ id: "/abs/path" }`) appends more trees without a registry write.
 
 `${CLAUDE_PLUGIN_DATA}` maps to `~/.agents/plugins/data/<slug>/` and that directory is created on first use. Plugin `bin/` is prepended onto `PATH` (v1 `shell.env`, v2 `ctx.shell.hook("create.before")`) while the plugin is enabled.

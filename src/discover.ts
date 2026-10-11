@@ -11,17 +11,21 @@ import {
 } from "./enablement.js";
 import { type ExpandContext } from "./expand.js";
 import { loadHooks, type ClaudeHooksConfig } from "./hooks.js";
-import {
-  loadInstalledPlugins,
-  pickInstallation,
-  resolveExistingInstallPath,
-  type InstalledPluginRecord,
-} from "./installed.js";
+import { loadInstalledPlugins, type InstalledPluginRecord } from "./installed.js";
 import { loadInstructions, type LoadedInstructions } from "./instructions.js";
+import { applyMarketplaceEntry } from "./marketplace-entry.js";
+import { MarketplaceIndex } from "./marketplace.js";
 import { findPluginRoot, loadManifestFromRoot, type PluginManifest } from "./manifest.js";
 import { loadMcpServers, type OpenCodeMcp } from "./mcp.js";
-import { warn } from "./log.js";
+import { debug, warn } from "./log.js";
 import { defaultRuntimePaths, pluginDataDir, type RuntimePaths } from "./paths.js";
+import {
+  describeAttempts,
+  pickInstallation,
+  resolvePluginRoot,
+  type ResolutionAttempt,
+  type ResolutionVia,
+} from "./plugin-root.js";
 import { loadSkills, type LoadedSkill } from "./skills.js";
 import { isDirectory } from "./fs-utils.js";
 
@@ -48,6 +52,12 @@ export type InstalledPluginStatus = {
   sourceKey?: string;
   reason?: string;
   plugin?: EnabledPlugin;
+  /** How the plugin root was found (or every place that was tried when it was not). */
+  resolution?: {
+    root?: string;
+    via?: ResolutionVia;
+    attempts: ResolutionAttempt[];
+  };
 };
 
 export type DiscoveryResult = {
@@ -66,6 +76,7 @@ export function discoverEnabledPlugins(overrides: Partial<RuntimePaths> = {}): D
   const enabled: EnabledPlugin[] = [];
   const skipped: Array<{ id: string; reason: string }> = [];
   const statuses: InstalledPluginStatus[] = [];
+  const marketplaces = new MarketplaceIndex(paths, activation.extraKnownMarketplaces);
 
   for (const record of installed) {
     const decision = resolvePluginEnablement(activation, record.id);
@@ -75,49 +86,56 @@ export function discoverEnabledPlugins(overrides: Partial<RuntimePaths> = {}): D
       sourceFile: decision.file,
       sourceKey: decision.key,
     };
-    const install = pickInstallation(record, paths);
+    const install = pickInstallation(record, paths, marketplaces);
     if (!install) {
       skipped.push({ id: record.id, reason: "no installation entry" });
       statuses.push({ ...statusBase, enabled: false, reason: "no installation entry" });
       continue;
     }
-    const existing = resolveExistingInstallPath(record, install, paths);
-    if (!existing) {
-      const reason = `installPath missing: ${install.installPath}`;
+    const resolved = resolvePluginRoot(record, install, paths, marketplaces);
+    const resolution = { root: resolved.root, via: resolved.via, attempts: resolved.attempts };
+    if (!resolved.root || !resolved.via) {
+      const reason = `plugin root unresolved: ${resolved.reason ?? describeAttempts(resolved.attempts)}`;
+      const log = isPluginEnabled(activation, record.id) ? warn : debug;
+      log(`cannot resolve plugin "${record.id}": ${reason}`);
       skipped.push({ id: record.id, reason });
-      statuses.push({ ...statusBase, enabled: false, reason });
+      statuses.push({ ...statusBase, enabled: false, reason, resolution });
       continue;
     }
-    const pluginRoot = findPluginRoot(existing);
+    debug(`resolved plugin "${record.id}" via ${resolved.via}: ${resolved.root}`);
+    // Marketplace sources are exact plugin directories; install/cache dirs may nest the plugin one level down.
+    const pluginRoot =
+      resolved.via === "installPath" || resolved.via === "cache" ? findPluginRoot(resolved.root) : resolved.root;
     if (!pluginRoot) {
       skipped.push({ id: record.id, reason: "could not find plugin root" });
-      statuses.push({ ...statusBase, enabled: false, reason: "could not find plugin root" });
+      statuses.push({ ...statusBase, enabled: false, reason: "could not find plugin root", resolution });
       continue;
     }
-    let loaded;
+    let manifest: PluginManifest;
     try {
-      loaded = loadManifestFromRoot(pluginRoot, record.name);
+      const loaded = loadManifestFromRoot(pluginRoot, record.name);
+      manifest = applyMarketplaceEntry(loaded, resolved.entry);
     } catch (cause) {
       const reason = `malformed plugin.json: ${cause instanceof Error ? cause.message : cause}`;
       warn(`skipping plugin "${record.id}": ${reason}`);
       skipped.push({ id: record.id, reason });
-      statuses.push({ ...statusBase, enabled: false, reason });
+      statuses.push({ ...statusBase, enabled: false, reason, resolution });
       continue;
     }
     if (!isPluginEnabled(activation, record.id)) {
       skipped.push({ id: record.id, reason: "disabled" });
-      statuses.push({ ...statusBase, enabled: false, reason: "disabled" });
+      statuses.push({ ...statusBase, enabled: false, reason: "disabled", resolution });
       continue;
     }
     try {
-      const plugin = hydratePlugin(record, loaded.manifest, pluginRoot, paths);
+      const plugin = hydratePlugin(record, manifest, pluginRoot, paths);
       enabled.push(plugin);
-      statuses.push({ ...statusBase, enabled: true, plugin });
+      statuses.push({ ...statusBase, enabled: true, plugin, resolution });
     } catch (cause) {
       const reason = `failed to load: ${cause instanceof Error ? cause.message : cause}`;
       warn(`skipping plugin "${record.id}": ${reason}`);
       skipped.push({ id: record.id, reason });
-      statuses.push({ ...statusBase, enabled: false, reason });
+      statuses.push({ ...statusBase, enabled: false, reason, resolution });
     }
   }
 
