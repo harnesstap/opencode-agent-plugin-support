@@ -112,7 +112,7 @@ OpenCode **v2** is the primary target. A v1 `server()` export remains for OpenCo
   data/<plugin-id>/
 ```
 
-`installPath` from `installed_plugins.json` is used as-is (`~` / `$HOME` expanded). Relative paths are resolved from `~/.agents/plugins/`. `${CLAUDE_PLUGIN_DATA}` is `~/.agents/plugins/data/<slug>/` and is created on first use.
+Plugin roots are found the way Claude Code finds them: a relative-path plugin of a local (`directory` / `file`) marketplace is read in place from that marketplace; otherwise `installPath` from `installed_plugins.json` (`~` / `$HOME` expanded, relative paths resolved from `~/.agents/plugins/`), then `cache/<marketplace>/<plugin>/<version>/`, then the marketplace clone's plugin `source`. Plugins that only exist in Claude's cache (`github`, `git-subdir`, `npm`, ... sources) cannot be rebuilt here; refresh them in Claude Code. Details in [ARCHITECTURE.md](ARCHITECTURE.md). `${CLAUDE_PLUGIN_DATA}` is `~/.agents/plugins/data/<slug>/` and is created on first use.
 
 Project-scoped installs for **other** repos are ignored. If several entries remain, the one whose directory exists wins.
 
@@ -140,7 +140,7 @@ npx @harnesstap/opencode-agent-plugin-support marketplace-add my-market github:o
 
 After a global install, the same commands work as `opencode-agent-plugin-support …`.
 
-- `list` — installed plugins, effective on/off, and source (`default` | `user` | `project`).
+- `list` — installed plugins, effective on/off, and source (`default` | `user` | `project`), plus the resolved `root`, how it was found (`resolvedVia`), every location tried (`tried`), and `reason` when a plugin is unresolved. Set `OPENCODE_AGENT_PLUGIN_SUPPORT_DEBUG=1` to log resolution to stderr.
 - `enable` / `disable` — write the user file, or `--project` for the repo file.
 - `install-local` — register a local directory (must exist). Does not clone git marketplaces.
 - `marketplace-add` — record an extra marketplace (`github:org/repo` or a path).

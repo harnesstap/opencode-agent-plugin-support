@@ -24,7 +24,7 @@ const ARGUMENT_PLACEHOLDER = /\$ARGUMENTS(?:\[\d+\])?|\$\d+\b/;
 export function skillSearchRoots(pluginRoot: string, manifest: PluginManifest): string[] {
   const roots = new Set<string>();
   const defaultDir = path.join(pluginRoot, "skills");
-  if (isDirectory(defaultDir)) roots.add(defaultDir);
+  if (!manifest.replaceDefaultSkills && isDirectory(defaultDir)) roots.add(defaultDir);
   for (const rel of asPathList(manifest.skills)) {
     try {
       roots.add(resolveComponentPath(pluginRoot, rel));

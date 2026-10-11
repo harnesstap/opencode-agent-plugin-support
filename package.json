@@ -1,6 +1,6 @@
 {
   "name": "@harnesstap/opencode-agent-plugin-support",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenCode plugin that loads and runs Claude Code plugins as native OpenCode skills, commands, agents, MCP servers, instructions, and hooks.",
   "license": "MIT",
   "author": {

@@ -37,6 +37,8 @@ export type PluginManifest = {
   lspServers?: unknown;
   settings?: Record<string, unknown>;
   userConfig?: Record<string, unknown>;
+  /** Set when a marketplace entry at the marketplace root lists `skills`: skip the default `skills/` scan. */
+  replaceDefaultSkills?: boolean;
   [key: string]: unknown;
 };
 

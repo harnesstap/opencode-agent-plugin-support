@@ -1,0 +1,11 @@
+{
+  "name": "teads-plugins",
+  "owner": { "name": "Fixture" },
+  "plugins": [
+    {
+      "name": "design-doc",
+      "source": "./innovation-general/documentation/design-doc",
+      "description": "Design doc authoring"
+    }
+  ]
+}

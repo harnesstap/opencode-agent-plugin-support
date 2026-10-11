@@ -1,5 +1,5 @@
 import path from "node:path";
-import { isDirectory, JsonParseError, readJsonFile } from "./fs-utils.js";
+import { JsonParseError, readJsonFile } from "./fs-utils.js";
 import { warn } from "./log.js";
 import { expandUserPath, installedPluginsPath, pluginsDir, type RuntimePaths, versionedCachePath } from "./paths.js";
 
@@ -119,35 +119,6 @@ export function loadInstalledPlugins(paths: RuntimePaths): InstalledPluginRecord
   }
 }
 
-export function pickInstallation(
-  record: InstalledPluginRecord,
-  paths: RuntimePaths,
-): PluginInstallation | undefined {
-  const cwd = path.resolve(paths.cwd);
-  const ranked = [...record.installations]
-    // project/local installs only apply inside their own project (Claude semantics)
-    .filter((install) => !isForeignProjectInstall(install, cwd))
-    .sort((a, b) => rankScope(a, cwd) - rankScope(b, cwd));
-  // prefer the best-ranked entry whose directory actually exists
-  return ranked.find((install) => resolveExistingInstallPath(record, install, paths)) ?? ranked[0];
-}
-
-function isForeignProjectInstall(install: PluginInstallation, cwd: string): boolean {
-  if (install.scope !== "project" && install.scope !== "local") return false;
-  if (!install.projectPath) return false;
-  return path.resolve(install.projectPath) !== cwd;
-}
-
-function rankScope(install: PluginInstallation, cwd: string): number {
-  if (install.scope === "local" && install.projectPath && path.resolve(install.projectPath) === cwd) return 0;
-  if (install.scope === "project" && install.projectPath && path.resolve(install.projectPath) === cwd) return 1;
-  if (install.scope === "local") return 2;
-  if (install.scope === "project") return 3;
-  if (install.scope === "user") return 4;
-  if (install.scope === "managed") return 5;
-  return 6;
-}
-
 export function resolveInstallPath(
   record: InstalledPluginRecord,
   install: PluginInstallation,
@@ -162,16 +133,4 @@ export function fallbackCachePath(record: InstalledPluginRecord, install: Plugin
   const marketplace = record.marketplace ?? "local";
   const version = install.version ?? "latest";
   return versionedCachePath(paths, marketplace, record.name, version);
-}
-
-export function resolveExistingInstallPath(
-  record: InstalledPluginRecord,
-  install: PluginInstallation,
-  paths: RuntimePaths,
-): string | undefined {
-  const primary = resolveInstallPath(record, install, paths);
-  if (isDirectory(primary)) return primary;
-  const fallback = fallbackCachePath(record, install, paths);
-  if (isDirectory(fallback)) return fallback;
-  return isDirectory(primary) ? primary : undefined;
 }
