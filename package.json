@@ -1,7 +1,7 @@
 {
   "name": "@harnesstap/opencode-agent-plugin-support",
-  "version": "0.1.1",
-  "description": "OpenCode plugin that loads and runs Claude Code plugins as native OpenCode skills, commands, agents, MCP servers, instructions, and hooks.",
+  "version": "0.2.0",
+  "description": "OpenCode plugin that loads Claude Code plugins and Agent Plugins (agent-plugins.org) packages as native OpenCode skills, commands, agents, MCP servers, instructions, and hooks.",
   "license": "MIT",
   "author": {
     "name": "HarnessTap",
@@ -14,13 +14,15 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./schema/agent-plugin-support.schema.json": "./schema/agent-plugin-support.schema.json"
   },
   "bin": {
     "opencode-agent-plugin-support": "./dist/cli.js"
   },
   "files": [
     "dist",
+    "schema",
     "index.js",
     "README.md",
     "ARCHITECTURE.md",
@@ -56,6 +58,7 @@
     "opencode-plugin",
     "claude-code",
     "claude-plugins",
+    "agent-plugins",
     "skills",
     "mcp"
   ],
