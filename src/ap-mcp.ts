@@ -87,7 +87,12 @@ export function checkServerShape(spec: unknown, platform: NodeJS.Platform = proc
       if (reserved) return { ok: false, reason: `"env" must not define ${reserved}; the client provides it` };
       env = parsed;
     }
-    if (spec.cwd !== undefined && typeof spec.cwd !== "string") return { ok: false, reason: `"cwd" must be a string` };
+    if (spec.cwd !== undefined) {
+      if (typeof spec.cwd !== "string") return { ok: false, reason: `"cwd" must be a string` };
+      if (!CWD_FORM.test(spec.cwd)) {
+        return { ok: false, reason: `"cwd" ${JSON.stringify(spec.cwd)} must start with "./", \${PLUGIN_ROOT} or \${PLUGIN_DATA}` };
+      }
+    }
     return { ok: true, server: { type, command: spec.command, args, env, cwd: spec.cwd as string | undefined } };
   }
 
@@ -190,9 +195,6 @@ function resolveCommand(command: string, realRoot: string): { command: string } 
 }
 
 function resolveCwd(cwd: string, realRoot: string, realData: string): { cwd: string } | { reason: string } {
-  if (!CWD_FORM.test(cwd)) {
-    return { reason: `"cwd" ${JSON.stringify(cwd)} must start with "./", \${PLUGIN_ROOT} or \${PLUGIN_DATA}` };
-  }
   const dataRooted = cwd.startsWith("${PLUGIN_DATA}");
   const absolute = cwd.startsWith("./") ? path.resolve(realRoot, cwd) : path.resolve(expandPluginVars(cwd, realRoot, realData));
   const within = resolveWithin(dataRooted ? realData : realRoot, absolute);

@@ -71,9 +71,18 @@ export function loadOpenCodeExtension(
   };
   const expand: ExpandContext = { ...ctx, pluginRoot: realRoot, pluginVars: true };
   const base = extDir;
+  const defaults: PluginManifest = { name: manifest.name };
+  // A Claude-style manifest that declares `commands` / `agents` replaces the default directory;
+  // here the directory and the inline declarations both apply (inline wins on a name clash).
   return {
-    commands: loadCommands(base, inlineManifest, accept),
-    agents: loadAgents(base, inlineManifest, accept),
+    commands: [
+      ...loadCommands(base, defaults, accept),
+      ...("commands" in inlineManifest ? loadCommands(base, inlineManifest, accept) : []),
+    ],
+    agents: [
+      ...loadAgents(base, defaults, accept),
+      ...("agents" in inlineManifest ? loadAgents(base, inlineManifest, accept) : []),
+    ],
     hooks: loadHooks(base, inlineManifest, expand, accept),
     instructions: hasDir
       ? loadInstructions(base, manifest.name, expand, { candidates: ["instructions.md"], accept })
