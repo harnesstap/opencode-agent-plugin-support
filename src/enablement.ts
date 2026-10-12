@@ -1,3 +1,4 @@
+import { loadConfig, writeConfigEnabled, type ConfigLayer, type EffectiveConfig } from "./config.js";
 import { isFile, JsonParseError, readJsonFile, writeJsonFile } from "./fs-utils.js";
 import { warn } from "./log.js";
 import { projectPluginsJsonPath, type RuntimePaths, userPluginsJsonPath } from "./paths.js";
@@ -20,9 +21,15 @@ export type ActivationLayer = {
 };
 
 export type PluginsActivation = {
+  /** Legacy `~/.agents/plugins.json`. */
   user: ActivationLayer;
+  /** Legacy `<repo>/.agents/plugins.json`. */
   project: ActivationLayer;
-  /** Project keys override user keys. Missing keys are not listed. */
+  /** `~/.agents/agent-plugin-support.json`; wins over both legacy files. */
+  userConfig: ActivationLayer;
+  /** `<repo>/.agents/agent-plugin-support.json`; wins over everything. */
+  projectConfig: ActivationLayer;
+  /** Effective keys after layering (see `resolvePluginEnablement`). Missing keys are not listed. */
   enabledPlugins: Record<string, boolean>;
   extraKnownMarketplaces?: Record<string, ExtraKnownMarketplace>;
 };
@@ -80,13 +87,22 @@ function readActivationLayer(filePath: string): ActivationLayer {
   return { path: filePath, exists, enabledPlugins: enabled, extraKnownMarketplaces: extra };
 }
 
+function configLayerAsActivation(layer: ConfigLayer): ActivationLayer {
+  return { path: layer.path, exists: layer.exists, enabledPlugins: layer.enabledPlugins };
+}
+
 /**
- * Only ~/.agents/plugins.json and <repo>/.agents/plugins.json are read.
- * Project overrides user. Missing files or keys mean the plugin stays enabled.
+ * Enablement layers, highest precedence first: `<repo>/.agents/agent-plugin-support.json`,
+ * `~/.agents/agent-plugin-support.json`, then the legacy `<repo>/.agents/plugins.json` and
+ * `~/.agents/plugins.json`. A key set in a higher layer is never looked up in a lower one.
+ * Missing files or keys mean the plugin stays enabled. `extraKnownMarketplaces` is still read
+ * from the legacy files only.
  */
-export function loadActivation(paths: RuntimePaths): PluginsActivation {
+export function loadActivation(paths: RuntimePaths, config: EffectiveConfig = loadConfig(paths)): PluginsActivation {
   const user = readActivationLayer(userPluginsJsonPath(paths));
   const project = readActivationLayer(projectPluginsJsonPath(paths));
+  const userConfig = configLayerAsActivation(config.user);
+  const projectConfig = configLayerAsActivation(config.project);
   const extraKnownMarketplaces = {
     ...user.extraKnownMarketplaces,
     ...project.extraKnownMarketplaces,
@@ -94,9 +110,13 @@ export function loadActivation(paths: RuntimePaths): PluginsActivation {
   return {
     user,
     project,
+    userConfig,
+    projectConfig,
     enabledPlugins: {
       ...user.enabledPlugins,
       ...project.enabledPlugins,
+      ...userConfig.enabledPlugins,
+      ...projectConfig.enabledPlugins,
     },
     extraKnownMarketplaces: Object.keys(extraKnownMarketplaces).length
       ? extraKnownMarketplaces
@@ -116,27 +136,21 @@ function matchingEnablementKey(map: Record<string, boolean>, pluginId: string): 
 }
 
 /**
- * Installed plugins are enabled unless some plugins.json sets the matching
- * key to false. Project wins over user. Manifest defaultEnabled is ignored.
+ * Installed plugins are enabled unless the highest layer that mentions them sets the
+ * matching key to false. Manifest defaultEnabled is ignored.
  */
 export function resolvePluginEnablement(activation: PluginsActivation, pluginId: string): EnablementDecision {
-  const projectKey = matchingEnablementKey(activation.project.enabledPlugins, pluginId);
-  if (projectKey !== undefined) {
-    return {
-      enabled: activation.project.enabledPlugins[projectKey] !== false,
-      source: "project",
-      key: projectKey,
-      file: activation.project.path,
-    };
-  }
-  const userKey = matchingEnablementKey(activation.user.enabledPlugins, pluginId);
-  if (userKey !== undefined) {
-    return {
-      enabled: activation.user.enabledPlugins[userKey] !== false,
-      source: "user",
-      key: userKey,
-      file: activation.user.path,
-    };
+  const layers: Array<[ActivationLayer, EnablementSource]> = [
+    [activation.projectConfig, "project"],
+    [activation.userConfig, "user"],
+    [activation.project, "project"],
+    [activation.user, "user"],
+  ];
+  for (const [layer, source] of layers) {
+    const key = matchingEnablementKey(layer.enabledPlugins, pluginId);
+    if (key !== undefined) {
+      return { enabled: layer.enabledPlugins[key] !== false, source, key, file: layer.path };
+    }
   }
   return { enabled: true, source: "default" };
 }
@@ -175,24 +189,48 @@ export function saveProjectActivation(
   });
 }
 
+export type EnablementWriteTarget = { file: string; kind: "config" | "legacy" };
+
+/**
+ * Where `enable` / `disable` write for a layer: that layer's `agent-plugin-support.json` when it
+ * exists, otherwise the legacy `plugins.json`.
+ */
+export function enablementWriteTarget(
+  paths: RuntimePaths,
+  layer: "user" | "project",
+  config: EffectiveConfig = loadConfig(paths),
+): EnablementWriteTarget {
+  const configLayer = layer === "project" ? config.project : config.user;
+  if (configLayer.exists) return { file: configLayer.path, kind: "config" };
+  return { file: layer === "project" ? projectPluginsJsonPath(paths) : userPluginsJsonPath(paths), kind: "legacy" };
+}
+
 export function setLayerEnabled(
   paths: RuntimePaths,
   pluginId: string,
   enabled: boolean,
   layer: "user" | "project",
 ): EnablementDecision {
-  const activation = loadActivation(paths);
-  const target = layer === "project" ? activation.project : activation.user;
-  const next: ActivationLayer = {
-    ...target,
-    enabledPlugins: {
-      ...target.enabledPlugins,
-      [pluginId]: enabled,
-    },
-  };
-  writeLayer(next);
-  const refreshed = loadActivation(paths);
-  return resolvePluginEnablement(refreshed, pluginId);
+  const config = loadConfig(paths);
+  const target = enablementWriteTarget(paths, layer, config);
+  if (target.kind === "config") {
+    const configLayer = layer === "project" ? config.project : config.user;
+    if (configLayer.error) {
+      throw new Error(`${target.file} is not valid JSON (${configLayer.error}); fix it before changing enablement`);
+    }
+    writeConfigEnabled(target.file, pluginId, enabled);
+  } else {
+    const activation = loadActivation(paths, config);
+    const legacy = layer === "project" ? activation.project : activation.user;
+    writeLayer({
+      ...legacy,
+      enabledPlugins: {
+        ...legacy.enabledPlugins,
+        [pluginId]: enabled,
+      },
+    });
+  }
+  return resolvePluginEnablement(loadActivation(paths), pluginId);
 }
 
 export function setUserExtraMarketplaces(

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseFrontmatter, splitList } from "./frontmatter.js";
 import { isDirectory, isFile, walkFiles } from "./fs-utils.js";
+import type { FileFilter } from "./safe-path.js";
 import { warn } from "./log.js";
 import {
   asPathList,
@@ -47,7 +48,8 @@ function fromMarkdownFile(filePath: string, name: string): LoadedCommand {
   };
 }
 
-function tryMarkdownCommand(filePath: string, name: string): LoadedCommand | undefined {
+function tryMarkdownCommand(filePath: string, name: string, accept?: FileFilter): LoadedCommand | undefined {
+  if (accept && !accept(filePath)) return undefined;
   try {
     return fromMarkdownFile(filePath, name);
   } catch (cause) {
@@ -56,27 +58,27 @@ function tryMarkdownCommand(filePath: string, name: string): LoadedCommand | und
   }
 }
 
-function collectMarkdownCommands(abs: string): LoadedCommand[] {
+function collectMarkdownCommands(abs: string, accept?: FileFilter): LoadedCommand[] {
   if (isFile(abs) && abs.endsWith(".md")) {
-    const loaded = tryMarkdownCommand(abs, path.basename(abs, path.extname(abs)));
+    const loaded = tryMarkdownCommand(abs, path.basename(abs, path.extname(abs)), accept);
     return loaded ? [loaded] : [];
   }
   if (!isDirectory(abs)) return [];
   return walkFiles(abs, (file) => file.endsWith(".md"))
-    .map((file) => tryMarkdownCommand(file, commandNameFromFile(file, abs)))
+    .map((file) => tryMarkdownCommand(file, commandNameFromFile(file, abs), accept))
     .filter((item): item is LoadedCommand => Boolean(item));
 }
 
-export function loadCommands(pluginRoot: string, manifest: PluginManifest): LoadedCommand[] {
+export function loadCommands(pluginRoot: string, manifest: PluginManifest, accept?: FileFilter): LoadedCommand[] {
   const declared = manifest.commands;
   if (declared === undefined) {
-    return collectMarkdownCommands(path.join(pluginRoot, "commands"));
+    return collectMarkdownCommands(path.join(pluginRoot, "commands"), accept);
   }
   if (typeof declared === "string" || Array.isArray(declared)) {
     const out: LoadedCommand[] = [];
     for (const rel of asPathList(declared)) {
       try {
-        out.push(...collectMarkdownCommands(resolveComponentPath(pluginRoot, rel)));
+        out.push(...collectMarkdownCommands(resolveComponentPath(pluginRoot, rel), accept));
       } catch {
         // skip
       }
@@ -91,6 +93,7 @@ export function loadCommands(pluginRoot: string, manifest: PluginManifest): Load
     if (typeof entry.source === "string") {
       try {
         const filePath = resolveComponentPath(pluginRoot, entry.source);
+        if (accept && !accept(filePath)) continue;
         const loaded = fromMarkdownFile(filePath, name);
         out.push({
           ...loaded,

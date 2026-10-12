@@ -20,12 +20,14 @@ export function loadInstructions(
   pluginRoot: string,
   pluginName: string,
   ctx: ExpandContext,
+  options: { candidates?: string[]; accept?: (filePath: string) => boolean } = {},
 ): LoadedInstructions {
   const files: string[] = [];
   const texts: string[] = [];
-  for (const name of CANDIDATES) {
+  for (const name of options.candidates ?? CANDIDATES) {
     const filePath = path.join(pluginRoot, name);
     if (!isFile(filePath)) continue;
+    if (options.accept && !options.accept(filePath)) continue;
     files.push(filePath);
     const body = expandString(fs.readFileSync(filePath, "utf8"), ctx).trim();
     if (body) {

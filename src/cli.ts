@@ -2,14 +2,17 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { discoverEnabledPlugins, loadPluginFromDirectory } from "./discover.js";
+import { loadConfig, type EffectiveConfig } from "./config.js";
 import {
+  enablementWriteTarget,
   loadActivation,
   setLayerEnabled,
   setUserExtraMarketplaces,
+  type PluginsActivation,
 } from "./enablement.js";
 import { isDirectory } from "./fs-utils.js";
 import { CLI_NAME } from "./identity.js";
-import { defaultRuntimePaths } from "./paths.js";
+import { defaultPluginsDir, defaultRuntimePaths, type RuntimePaths } from "./paths.js";
 import { CLAUDE_REGISTRY_WRITE_HELP, writesThroughClaudePluginRegistry } from "./registry-guard.js";
 import { saveKnownMarketplace, upsertInstallation } from "./registry-write.js";
 import { findPluginRoot, loadManifestFromRoot } from "./manifest.js";
@@ -18,13 +21,64 @@ export function usage(): string {
   return `${CLI_NAME} <command>
 
 Commands:
-  list                         Show installed plugins with effective enablement and source
-  enable <id> [--project]      Set enabledPlugins[id]=true (user or project file)
-  disable <id> [--project]     Set enabledPlugins[id]=false (user or project file)
+  list                         Show plugins with source, format, effective enablement and where it was decided
+  sources | config             Print the effective config: config files, sources, enablement by file
+  enable <id> [--project]      Set enabledPlugins[id]=true in agent-plugin-support.json (or legacy plugins.json)
+  disable <id> [--project]     Set enabledPlugins[id]=false in agent-plugin-support.json (or legacy plugins.json)
   install-local <dir> [id] [--write-claude-registry]
                                Register a local plugin directory
   marketplace-add <name> <src> Record an extra marketplace (github:org/repo or path)
 `;
+}
+
+function describeSources(config: EffectiveConfig, counts: Map<string, number> = new Map()) {
+  const describe = (source: EffectiveConfig["sources"][number]) => ({
+    path: source.path,
+    declaredPath: source.declaredPath,
+    format: source.format,
+    label: source.label,
+    origin: source.origin,
+    configFile: source.configFile ?? null,
+    exists: isDirectory(source.path),
+    ...(counts.has(source.path) ? { plugins: counts.get(source.path) } : {}),
+  });
+  return { active: config.sources.map(describe), disabled: config.disabledSources.map(describe) };
+}
+
+function describeEnablement(activation: PluginsActivation) {
+  const layers = [activation.projectConfig, activation.userConfig, activation.project, activation.user];
+  const out: Record<string, { enabled: boolean; file: string }> = {};
+  for (const key of Object.keys(activation.enabledPlugins)) {
+    const layer = layers.find((item) => key in item.enabledPlugins);
+    if (layer) out[key] = { enabled: layer.enabledPlugins[key] !== false, file: layer.path };
+  }
+  return out;
+}
+
+function sourcesReport(paths: RuntimePaths) {
+  const config = loadConfig(paths);
+  const activation = loadActivation(paths, config);
+  const sources = describeSources(config);
+  const file = (layer: { scope?: string; path: string; exists: boolean; error?: string }) => ({
+    ...(layer.scope ? { scope: layer.scope } : {}),
+    path: layer.path,
+    exists: layer.exists,
+    ...(layer.error ? { error: layer.error } : {}),
+  });
+  return {
+    mode: config.exists ? "config" : "legacy",
+    note: config.exists
+      ? "At least one agent-plugin-support.json exists; enabledPlugins there wins over the legacy plugins.json files."
+      : "No agent-plugin-support.json found: behaving like 0.1.x (single claude source ~/.agents/plugins, enablement from plugins.json).",
+    configFiles: [file(config.project), file(config.user)],
+    legacyFiles: [
+      { scope: "project", path: activation.project.path, exists: activation.project.exists },
+      { scope: "user", path: activation.user.path, exists: activation.user.exists },
+    ],
+    sources: sources.active,
+    disabledSources: sources.disabled,
+    enabledPlugins: describeEnablement(activation),
+  };
 }
 
 export function main(argv: string[]): number {
@@ -38,12 +92,19 @@ export function main(argv: string[]): number {
   switch (cmd) {
     case "list": {
       const discovered = discoverEnabledPlugins(paths);
+      const counts = new Map(discovered.sources.map((item) => [item.source.path, item.pluginCount]));
       process.stdout.write(
         JSON.stringify(
           {
-            pluginsDir: path.join(paths.home, ".agents", "plugins"),
+            pluginsDir: defaultPluginsDir(paths),
             userFile: discovered.activation.user.path,
             projectFile: discovered.activation.project.path,
+            configFiles: [discovered.config.project, discovered.config.user].map((layer) => ({
+              scope: layer.scope,
+              path: layer.path,
+              exists: layer.exists,
+            })),
+            sources: describeSources(discovered.config, counts).active,
             plugins: discovered.statuses.map((status) => ({
               id: status.id,
               enabled: status.enabled,
@@ -51,6 +112,11 @@ export function main(argv: string[]): number {
               sourceFile: status.sourceFile ?? null,
               sourceKey: status.sourceKey ?? null,
               reason: status.reason ?? null,
+              format: status.format ?? null,
+              dualManifest: status.dualManifest ?? false,
+              sourcePath: status.origin?.path ?? null,
+              sourceLabel: status.origin?.label ?? null,
+              sourceFormat: status.origin?.format ?? null,
               root: status.plugin?.pluginRoot ?? status.resolution?.root ?? null,
               resolvedVia: status.resolution?.via ?? null,
               tried: status.resolution?.attempts ?? [],
@@ -58,13 +124,20 @@ export function main(argv: string[]): number {
               commands: status.plugin?.commands.map((item) => item.name) ?? [],
               agents: status.plugin?.agents.map((item) => item.name) ?? [],
               mcp: status.plugin ? Object.keys(status.plugin.mcp) : [],
+              mcpSkipped: status.plugin?.mcpSkipped ?? [],
               hooks: status.plugin ? Object.keys(status.plugin.hooks) : [],
+              diagnostics: status.diagnostics ?? [],
             })),
           },
           null,
           2,
         ) + "\n",
       );
+      return 0;
+    }
+    case "sources":
+    case "config": {
+      process.stdout.write(`${JSON.stringify(sourcesReport(paths), null, 2)}\n`);
       return 0;
     }
     case "enable":
@@ -75,13 +148,22 @@ export function main(argv: string[]): number {
         return 1;
       }
       const layer = rest.includes("--project") ? "project" : "user";
-      const decision = setLayerEnabled(paths, id, cmd === "enable", layer);
+      const target = enablementWriteTarget(paths, layer);
+      let decision;
+      try {
+        decision = setLayerEnabled(paths, id, cmd === "enable", layer);
+      } catch (cause) {
+        process.stderr.write(`${cause instanceof Error ? cause.message : String(cause)}\n`);
+        return 1;
+      }
       process.stdout.write(
         JSON.stringify(
           {
             id,
             requested: cmd === "enable",
             wroteTo: layer,
+            wroteFile: target.file,
+            wroteKind: target.kind,
             enabled: decision.enabled,
             source: decision.source,
             sourceFile: decision.file ?? null,
@@ -122,6 +204,12 @@ export function main(argv: string[]): number {
       });
       loadPluginFromDirectory(root, id, paths);
       process.stdout.write(`installed ${id} from ${root}\n`);
+      const defaultStore = defaultPluginsDir(paths);
+      if (!loadConfig(paths).sources.some((source) => source.path === defaultStore)) {
+        process.stderr.write(
+          `note: ${defaultStore} is not one of your configured sources, so ${id} will not load until you add it to "sources" in agent-plugin-support.json\n`,
+        );
+      }
       return 0;
     }
     case "marketplace-add": {
