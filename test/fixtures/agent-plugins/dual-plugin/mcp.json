@@ -1,0 +1,7 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "shared": { "type": "stdio", "command": "node", "args": ["agent-plugins-version"] },
+    "agent-only": { "type": "stdio", "command": "node", "args": ["${PLUGIN_ROOT}/server.js"], "cwd": "${PLUGIN_DATA}" }
+  }
+}

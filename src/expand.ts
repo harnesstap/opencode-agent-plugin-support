@@ -6,6 +6,8 @@ export type ExpandContext = {
   projectDir: string;
   env: NodeJS.ProcessEnv;
   userConfig?: Record<string, string | number | boolean | undefined>;
+  /** Also expand the Agent Plugins names `PLUGIN_ROOT` / `PLUGIN_DATA` (Agent Plugins-format plugins). */
+  pluginVars?: boolean;
 };
 
 export function expandString(value: string, ctx: ExpandContext): string {
@@ -14,6 +16,8 @@ export function expandString(value: string, ctx: ExpandContext): string {
     if (name === "CLAUDE_PLUGIN_ROOT") return ctx.pluginRoot;
     if (name === "CLAUDE_PLUGIN_DATA") return ctx.pluginData;
     if (name === "CLAUDE_PROJECT_DIR") return ctx.projectDir;
+    if (ctx.pluginVars && name === "PLUGIN_ROOT") return ctx.pluginRoot;
+    if (ctx.pluginVars && name === "PLUGIN_DATA") return ctx.pluginData;
     if (name.startsWith("user_config.")) {
       const key = name.slice("user_config.".length);
       const found = ctx.userConfig?.[key];

@@ -1,0 +1,6 @@
+{
+  "mcpServers": {
+    "claude-only": { "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/server.js"] },
+    "shared": { "command": "node", "args": ["claude-version"] }
+  }
+}

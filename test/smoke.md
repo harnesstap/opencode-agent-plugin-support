@@ -64,6 +64,30 @@ mkdir -p ~/.agents/plugins
 npx @harnesstap/opencode-agent-plugin-support install-local ./test/fixtures/demo-plugin fixture-demo@local --write-claude-registry
 ```
 
+## Config file, Claude plugin and Agent Plugins package (0.2.0)
+
+Verified on **OpenCode 2.0.26** (`npm i @opencode/cli@2.0.26`) with an isolated `HOME` / `XDG_*`, no symlinks:
+
+```bash
+S=/tmp/ocsmoke; mkdir -p $S/home/.claude/plugins/cache/local/fixture-demo/1.0.0 $S/home/.agents $S/home/pkgs $S/proj
+cp -r test/fixtures/demo-plugin/. $S/home/.claude/plugins/cache/local/fixture-demo/1.0.0/
+echo '{"version":2,"plugins":{"fixture-demo@local":[{"scope":"user","installPath":"'$S'/home/.claude/plugins/cache/local/fixture-demo/1.0.0"}]}}' > $S/home/.claude/plugins/installed_plugins.json
+cp -r test/fixtures/agent-plugins/ap-demo $S/home/pkgs/ap-demo
+cat > $S/home/.agents/agent-plugin-support.json <<'JSON'
+{ "sources": [ { "path": "~/.claude/plugins", "format": "claude" },
+               { "path": "~/pkgs", "format": "agent-plugins", "label": "pkgs" } ] }
+JSON
+echo '{ "plugins": ["'$(pwd)'"] }' > $S/proj/opencode.json
+cd $S/proj
+export HOME=$S/home XDG_CONFIG_HOME=$HOME/.config XDG_DATA_HOME=$HOME/.local/share XDG_STATE_HOME=$HOME/.local/state XDG_CACHE_HOME=$HOME/.cache
+opencode service start
+opencode api -H "x-opencode-directory: $S/proj" GET /api/mcp   # also /api/plugin /api/skill /api/command /api/agent
+```
+
+`opencode api --standalone` and a request without the `x-opencode-directory` header do not load project plugins; use the service and the header.
+
+Observed: plugin `opencode-agent-plugin-support` active; skills `greet` (Agent Plugins) plus `hello`, `legacy-context`, `demo-skill` (Claude); commands `ap-demo:greet`, `ap-demo:hello`, `ap-demo:inline-hi`, `fixture-demo:hello`, `fixture-demo:demo-skill`, `fixture-demo:manual-deploy`; agents `ap-demo:helper` and `fixture-demo:reviewer` (`subagent`); MCP `ap-demo:whoami` **connected** (the fixture servers that exit, point at example.com, or at an unused port report `failed` by design), with the `sse` and malformed entries never registered. To see what OpenCode launched the server with, make `mcp-server.mjs` write its environment into `$PLUGIN_DATA` at startup: `PLUGIN_ROOT` and `PLUGIN_DATA` were set, `cwd` was `PLUGIN_DATA`, `${PLUGIN_ROOT}` / `${PLUGIN_DATA}` were expanded once in `args` and `env`, and `$HOME` / `${CLAUDE_PLUGIN_ROOT}` stayed literal.
+
 ## v1
 
 ```json

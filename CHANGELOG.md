@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0 - 2026-10-12
+
+Config file, multiple plugin sources, and [Agent Plugins](https://github.com/agentplugins/agent-plugins-spec) 1.0.0 support. Without a config file nothing changes from 0.1.1.
+
+- **Config file** `~/.agents/agent-plugin-support.json` and `<repo>/.agents/agent-plugin-support.json` with `sources` (`path`, `format`: `claude` | `agent-plugins` | `auto`, optional `label`, `enabled`) and `enabledPlugins`; JSON schema in `schema/`. Point at `~/.claude/plugins` directly, no symlink needed. `~` and config-relative paths work. Project sources come first and override user sources by path.
+- **Enablement precedence** is now project config, user config, project `plugins.json`, user `plugins.json`. `plugins.json` is deprecated but still read.
+- **Agent Plugins 1.0.0**: root `plugin.json` (closed field set, name rules, unknown fields reported and ignored), `skills/<dir>/SKILL.md` (immediate children, Agent Skills validation), `mcp.json` (strict `stdio` / `streamable-http` rules, `${PLUGIN_ROOT}` / `${PLUGIN_DATA}`, URL and header checks, `PLUGIN_ROOT` / `PLUGIN_DATA` in the environment), realpath containment for every package path. `sse` servers are skipped with a report because OpenCode has no SSE client. Spec `1.1.0` (working draft) and unknown `$schema` values are rejected.
+- **`com.harnesstap.opencode` extension** (`com.harnesstap.opencode/` and/or `extensions["com.harnesstap.opencode"]`): `commands/`, `agents/`, `hooks/hooks.json`, `instructions.md` for Agent Plugins packages. Hook processes get `PLUGIN_ROOT` / `PLUGIN_DATA` next to the `CLAUDE_*` variables.
+- **Ids and duplicates.** Agent Plugins ids are `<name>@<label>`; Claude ids are unchanged. Two enabled plugins with the same name from different sources: first source wins, warning logged.
+- **Dual manifests** (`.claude-plugin/plugin.json` plus an Agent Plugins `plugin.json`): Claude is primary and `mcp.json` servers are added from `claude` and `auto` sources; Agent Plugins only from `agent-plugins` sources. An invalid Agent Plugins manifest falls back to Claude with a warning.
+- **CLI**: `list` shows `format`, `sourcePath`, `sourceLabel`, `sourceFormat`, `dualManifest`, `mcpSkipped` and `diagnostics` per plugin; new `sources` (alias `config`) prints the effective config; `enable` / `disable` write the config file when it exists (else `plugins.json`) and report `wroteFile`.
+- **Fix:** the CLI printed nothing when started through the `node_modules/.bin` symlink (`npx`, global installs).
+- Tests run the official [agent-plugins-conformance](https://github.com/agentplugins/agent-plugins-conformance) fixtures (vendored under `test/fixtures`, with license notes) and cross-check the validators against the official 1.0.0 JSON schemas.
+
 ## 0.1.1 - 2026-10-11
 
 Fix plugins that Claude Code loads from their marketplace never showing up in OpenCode (for example a plugin in a `directory` marketplace whose `cache/<marketplace>/<plugin>/<version>/` copy Claude had swept).

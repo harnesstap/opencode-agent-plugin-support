@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseFrontmatter, splitList } from "./frontmatter.js";
 import { isDirectory, isFile, walkFiles } from "./fs-utils.js";
+import type { FileFilter } from "./safe-path.js";
 import { warn } from "./log.js";
 import { asPathList, type PluginManifest, resolveComponentPath } from "./manifest.js";
 import { claudeToolsToOpenCodeMap } from "./tool-names.js";
@@ -63,7 +64,8 @@ function fromMarkdownFile(filePath: string, fallbackName: string): LoadedAgent {
   };
 }
 
-function tryMarkdownAgent(filePath: string, fallbackName: string): LoadedAgent | undefined {
+function tryMarkdownAgent(filePath: string, fallbackName: string, accept?: FileFilter): LoadedAgent | undefined {
+  if (accept && !accept(filePath)) return undefined;
   try {
     return fromMarkdownFile(filePath, fallbackName);
   } catch (cause) {
@@ -72,25 +74,25 @@ function tryMarkdownAgent(filePath: string, fallbackName: string): LoadedAgent |
   }
 }
 
-function collectAgents(abs: string): LoadedAgent[] {
+function collectAgents(abs: string, accept?: FileFilter): LoadedAgent[] {
   if (isFile(abs) && abs.endsWith(".md")) {
-    const loaded = tryMarkdownAgent(abs, path.basename(abs, path.extname(abs)));
+    const loaded = tryMarkdownAgent(abs, path.basename(abs, path.extname(abs)), accept);
     return loaded ? [loaded] : [];
   }
   if (!isDirectory(abs)) return [];
   return walkFiles(abs, (file) => file.endsWith(".md"))
-    .map((file) => tryMarkdownAgent(file, agentNameFromFile(file, abs)))
+    .map((file) => tryMarkdownAgent(file, agentNameFromFile(file, abs), accept))
     .filter((item): item is LoadedAgent => Boolean(item));
 }
 
-export function loadAgents(pluginRoot: string, manifest: PluginManifest): LoadedAgent[] {
+export function loadAgents(pluginRoot: string, manifest: PluginManifest, accept?: FileFilter): LoadedAgent[] {
   if (manifest.agents === undefined) {
-    return collectAgents(path.join(pluginRoot, "agents"));
+    return collectAgents(path.join(pluginRoot, "agents"), accept);
   }
   const out: LoadedAgent[] = [];
   for (const rel of asPathList(manifest.agents)) {
     try {
-      out.push(...collectAgents(resolveComponentPath(pluginRoot, rel)));
+      out.push(...collectAgents(resolveComponentPath(pluginRoot, rel), accept));
     } catch {
       // skip
     }

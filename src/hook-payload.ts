@@ -1,12 +1,17 @@
 import type { EnabledPlugin } from "./discover.js";
 import { pluginDataDir, type RuntimePaths } from "./paths.js";
+import { realpathOrUndefined } from "./safe-path.js";
 
 export function hookEnv(plugin: EnabledPlugin, paths: RuntimePaths): NodeJS.ProcessEnv {
+  const data = pluginDataDir(paths, plugin.id);
   return {
     ...paths.env,
     CLAUDE_PLUGIN_ROOT: plugin.pluginRoot,
-    CLAUDE_PLUGIN_DATA: pluginDataDir(paths, plugin.id),
+    CLAUDE_PLUGIN_DATA: data,
     CLAUDE_PROJECT_DIR: paths.cwd,
+    ...(plugin.agentPluginsRoot
+      ? { PLUGIN_ROOT: plugin.agentPluginsRoot, PLUGIN_DATA: realpathOrUndefined(data) ?? data }
+      : {}),
   };
 }
 

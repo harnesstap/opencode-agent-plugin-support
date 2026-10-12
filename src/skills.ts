@@ -59,28 +59,31 @@ export function loadSkills(pluginRoot: string, manifest: PluginManifest): Loaded
         warn(`skipping skill ${filePath}: ${cause instanceof Error ? cause.message : cause}`);
         continue;
       }
-      const dir = path.dirname(filePath);
-      const fromFm = typeof data.name === "string" ? data.name : undefined;
-      const name = fromFm || path.basename(dir);
-      const description = listingDescription(data);
-      const argumentHint = frontmatterString(data, "argument-hint", "argumentHint");
-      skills.push({
-        name,
-        description,
-        dir,
-        filePath,
-        body,
-        frontmatter: data,
-        ...(argumentHint ? { argumentHint } : {}),
-        userInvocable: parseYamlBoolean(data["user-invocable"] ?? data.userInvocable, true),
-        disableModelInvocation: parseYamlBoolean(
-          data["disable-model-invocation"] ?? data.disableModelInvocation,
-          false,
-        ),
-      });
+      skills.push(buildLoadedSkill(filePath, data, body));
     }
   }
   return skills;
+}
+
+/** Assemble a `LoadedSkill` from a parsed `SKILL.md`. Shared by the Claude and Agent Plugins loaders. */
+export function buildLoadedSkill(filePath: string, data: Record<string, unknown>, body: string): LoadedSkill {
+  const dir = path.dirname(filePath);
+  const fromFm = typeof data.name === "string" ? data.name : undefined;
+  const argumentHint = frontmatterString(data, "argument-hint", "argumentHint");
+  return {
+    name: fromFm || path.basename(dir),
+    description: listingDescription(data),
+    dir,
+    filePath,
+    body,
+    frontmatter: data,
+    ...(argumentHint ? { argumentHint } : {}),
+    userInvocable: parseYamlBoolean(data["user-invocable"] ?? data.userInvocable, true),
+    disableModelInvocation: parseYamlBoolean(
+      data["disable-model-invocation"] ?? data.disableModelInvocation,
+      false,
+    ),
+  };
 }
 
 function listingDescription(data: Record<string, unknown>): string {

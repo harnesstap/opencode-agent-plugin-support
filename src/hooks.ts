@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expandDeep, type ExpandContext } from "./expand.js";
 import { isFile, JsonParseError, readJsonFile } from "./fs-utils.js";
+import type { FileFilter } from "./safe-path.js";
 import { warn } from "./log.js";
 import { isRecord, type PluginManifest, resolveComponentPath } from "./manifest.js";
 
@@ -67,8 +68,9 @@ function mergeHookConfigs(...configs: ClaudeHooksConfig[]): ClaudeHooksConfig {
   return out;
 }
 
-function readHooksFile(filePath: string): ClaudeHooksConfig {
+function readHooksFile(filePath: string, accept?: FileFilter): ClaudeHooksConfig {
   if (!isFile(filePath)) return {};
+  if (accept && !accept(filePath)) return {};
   try {
     return parseHooksObject(readJsonFile<unknown>(filePath));
   } catch (cause) {
@@ -82,8 +84,9 @@ export function loadHooks(
   pluginRoot: string,
   manifest: PluginManifest,
   ctx: ExpandContext,
+  accept?: FileFilter,
 ): ClaudeHooksConfig {
-  const fromDefault = readHooksFile(path.join(pluginRoot, "hooks", "hooks.json"));
+  const fromDefault = readHooksFile(path.join(pluginRoot, "hooks", "hooks.json"), accept);
   const declared = manifest.hooks;
   if (declared === undefined) return expandDeep(fromDefault, ctx);
   const pieces = Array.isArray(declared) ? declared : [declared];
@@ -91,7 +94,7 @@ export function loadHooks(
   for (const piece of pieces) {
     if (typeof piece === "string") {
       try {
-        extras.push(readHooksFile(resolveComponentPath(pluginRoot, piece)));
+        extras.push(readHooksFile(resolveComponentPath(pluginRoot, piece), accept));
       } catch (cause) {
         warn(`skipping declared hooks path "${piece}": ${cause instanceof Error ? cause.message : cause}`);
       }
