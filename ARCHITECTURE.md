@@ -1,6 +1,6 @@
 # Architecture
 
-Runtime bridge: Claude Code plugin trees stay on disk under `~/.agents/plugins/` (same layout as `~/.claude/plugins/`). This package never copies components into `.opencode/` or `~/.agents/skills`.
+Runtime bridge: Claude Code plugin trees and Agent Plugins packages stay on disk where they are (by default `~/.agents/plugins/`, same layout as `~/.claude/plugins/`; any directory via `sources`). This package never copies components into `.opencode/` or `~/.agents/skills`.
 
 OpenCode **v2** is the primary host. The default export is `{ id, setup, server }`:
 
@@ -9,17 +9,52 @@ OpenCode **v2** is the primary host. The default export is `{ id, setup, server 
 
 A root `index.js` re-exports `./dist/index.js` so a **directory** path in v2 `plugins` loads (v2 does not honor `package.json` `"main"` for local folders, and rejects file paths).
 
+## Config and sources
+
+`src/config.ts` reads `~/.agents/agent-plugin-support.json` and `<cwd>/.agents/agent-plugin-support.json` (`parseConfigDocument` is pure; problems are warnings, never fatal) and `mergeConfigLayers` produces the effective source list:
+
+- Neither file declares `sources` → one implicit source `{ path: ~/.agents/plugins, format: claude }`. Together with the legacy `plugins.json` precedence below this is exactly 0.1.x.
+- Otherwise project sources first, then user sources, deduplicated by resolved path (project wins, which is also how `enabled: false` removes a user source). `~` is expanded and relative paths resolve from the declaring file's directory.
+- Labels (the `@<label>` of Agent Plugins ids) are explicit or derived (`deriveSourceLabel`) and made unique with a `-2` suffix and a warning.
+
+Enablement (`src/enablement.ts`) resolves a key through four layers, first hit wins: project config, user config, project `plugins.json`, user `plugins.json`. `enable` / `disable` write the layer's config file when it exists (other fields preserved, refused if it is not valid JSON), else the legacy file.
+
+`discoverEnabledPlugins` (`src/discover.ts`) walks the sources in order through `src/source-discovery.ts`, then drops a plugin whose **name** (the namespace prefix) was already provided by an earlier source. Duplicates inside one source keep 0.1.x behavior. `${CLAUDE_PLUGIN_DATA}` / `${PLUGIN_DATA}` is always `~/.agents/plugins/data/<slug>`, independent of sources (`pluginDataDir` ignores `RuntimePaths.storeDir`).
+
+| Source format | What `source-discovery` does |
+| --- | --- |
+| `claude` | Registry readers with `RuntimePaths.storeDir` set to the source (the steps under **Discovery**). |
+| `agent-plugins` | Sorted immediate children, skipping `cache`, `data`, `marketplaces`, `repos`, dot-directories and non-directories. Each child's `realpath` is the plugin root; root `plugin.json` decides. |
+| `auto` | Registry (if present) and children. Per plugin: `.claude-plugin/plugin.json` → Claude (plus dual merge); else an Agent Plugins `plugin.json` → Agent Plugins; else ignored. For a registry plugin without a Claude manifest but with a valid Agent Plugins one, Agent Plugins semantics apply and the registry id is kept. |
+
+## Agent Plugins loading (1.0.0)
+
+Modules: `ap-manifest.ts` (manifest), `ap-skills.ts`, `ap-mcp.ts`, `ap-extension.ts` (`com.harnesstap.opencode`), `safe-path.ts` (containment), `plugin-build.ts` (assembly).
+
+- **Version.** `$schema` must equal the 1.0.0 identifier. `1.1.0` is a working draft whose schemas differ only in `$id`/`$schema`; it is rejected like any unsupported version, because the spec only allows accepting identifiers a client explicitly recognizes as compatible. Schemas are never fetched.
+- **Manifest** (§5): closed field set; unknown top-level fields and a non-object `extensions` are reported and ignored; everything else (including the name rule: 1-64 of `a-z0-9.-`, alphanumeric ends, no `--` or `..`) rejects the plugin. Contents of other clients' `extensions` namespaces are not validated.
+- **Containment** (§4.1). `resolveWithin(realBase, target)` requires the lexical path and the symlink-resolved path (nearest existing ancestor, plus the missing tail) to stay inside the base; a dangling or looping link is refused. Applied to `plugin.json` (rejects the plugin), `skills/` (disables skills), each `SKILL.md` (skips it), MCP `command` and `cwd` (skips the server; `${PLUGIN_DATA}`-rooted `cwd` is checked against the data directory) and extension files.
+- **Skills** (§7.1). Immediate children of `skills/` with a `SKILL.md` regular file; no recursion. Frontmatter is checked against the Agent Skills spec (name format and equal to the directory, description 1-1024, optional field types); extra fields are tolerated. Invalid skills are skipped and reported.
+- **MCP** (§7.2, §9). `loadAgentMcp` validates `mcp.json` (closed top-level, `$schema` equal to the plugin's version), then each entry: closed variants `stdio` / `streamable-http` / `sse`; `command` is one token (bare name or `./` path, never expanded, resolved against the plugin root, not `cwd`); `cwd` must be `./…`, `${PLUGIN_ROOT}…` or `${PLUGIN_DATA}…`; URL must be absolute http(s) without userinfo or fragment, https unless `localhost` or a loopback IP literal; header names are RFC 9110 tokens, no case-folded duplicates, values without control characters; `env` may not define `PLUGIN_ROOT` / `PLUGIN_DATA`. Expansion is one regex pass over `${PLUGIN_ROOT}` / `${PLUGIN_DATA}` in `args`, `env` values and `cwd` only. The two variables are set in the environment after `env`. A valid `sse` entry is skipped as unsupported (OpenCode has no SSE client). Mapping: stdio → `local` (`command`, `environment`, `cwd`), `streamable-http` → `remote`.
+- **No Claude extras.** Root `AGENTS.md` / `CLAUDE.md` are not injected and `bin/` is not put on `PATH`.
+- **OpenCode extension.** `ap-extension.ts` runs the Claude loaders with `com.harnesstap.opencode/` as the base (default `commands/`, `agents/`, `hooks/hooks.json`; only `instructions.md` for instructions) and with inline `commands`, `agents`, `hooks` from `extensions["com.harnesstap.opencode"]`. Unlike a Claude manifest, inline declarations add to the default directories instead of replacing them. A file filter (`FileFilter`) applies containment to every file read. Hook processes get `PLUGIN_ROOT` / `PLUGIN_DATA` (`hookEnv`, `agentPluginsRoot`), and `expandString` expands both names (`ExpandContext.pluginVars`).
+- **Reporting.** Everything the spec says to report goes through `Diagnostics`: logged as a warning (debug for disabled plugins) and kept in `EnabledPlugin.diagnostics`, shown by `list`. Skipped MCP servers are in `mcpSkipped`.
+
+### Dual manifests
+
+A plugin with a valid Agent Plugins `plugin.json` (the `$schema` identifies it; a root `plugin.json` without an agent-plugins.org `$schema` is ignored) in a `claude` or `auto` source (or with a `.claude-plugin/plugin.json` in `auto`) is loaded Claude-first (`hydrateClaudePlugin`) and `mcp.json` servers are added when the Claude manifest does not already define the name. The Claude name stays the namespace prefix and a different Agent Plugins `name` warns. Skills, commands, agents, instructions, hooks and `bin/` come from the Claude layout only. An invalid or unsupported Agent Plugins manifest warns and the plugin is Claude-only. In an `agent-plugins` source only the Agent Plugins side exists.
+
 ## Discovery
 
-1. Read activation from `~/.agents/plugins.json` and `<cwd>/.agents/plugins.json` only. Project `enabledPlugins` keys override user keys. Missing file/key → enabled. Manifest `defaultEnabled` is ignored.
-2. Parse `~/.agents/plugins/installed_plugins.json` (see versions below). Optional v2/v1 plugin option `skipInstalled` skips this.
+1. Read activation from the four enablement layers (see **Config and sources**). Missing file/key → enabled. Manifest `defaultEnabled` is ignored. Everything below applies per `claude` source, with `~/.agents/plugins` standing for the source directory.
+2. Parse `<source>/installed_plugins.json` (see versions below). Optional v2/v1 plugin option `skipInstalled` skips this.
 3. For each record, pick an installation:
    - Drop `project` / `local` entries whose `projectPath` is a different cwd.
    - Rank remaining: matching-cwd `local` / `project`, then other `local` / `project` without a foreign path, then `user`, `managed`.
    - Prefer the best-ranked entry whose directory exists.
 4. Resolve the plugin root (`src/plugin-root.ts`), first hit wins. This mirrors Claude Code, which loads relative-path plugins of local marketplaces in place and copies everything else into `cache/`, and sweeps cache dirs it no longer uses:
    1. **Local marketplace, in place.** If the plugin's marketplace is a `directory` / `file` marketplace (`known_marketplaces.json` `installLocation` or `source.path`, or `extraKnownMarketplaces` in `plugins.json`) and the `marketplace.json` entry has a relative-path `source`, use that directory. It wins over a cache copy because Claude reads it live.
-   2. `installPath` (`~` / `$HOME` expanded). Relative paths are resolved from `~/.agents/plugins/` (not `$HOME`), so Claude’s `cache/...` values work.
+   2. `installPath` (`~` / `$HOME` expanded). Relative paths are resolved from the source directory (not `$HOME`), so Claude’s `cache/...` values work.
    3. `cache/<marketplace>/<name>/<version>/`.
    4. **Marketplace tree.** For git-hosted marketplaces, the clone (`installLocation`, `marketplaces/<name>/`, `marketplaces/<repo-slug>/`, or the `marketplaces/<name>.json` file of a `url` marketplace) plus the entry's relative `source`.
 
@@ -29,7 +64,7 @@ A root `index.js` re-exports `./dist/index.js` so a **directory** path in v2 `pl
 5. For `installPath` / cache hits, find the plugin root (directory containing `.claude-plugin/plugin.json` or equivalent; marketplace hits are already exact). Load the manifest and merge the marketplace entry (`src/marketplace-entry.ts`): no `plugin.json` → the entry is the manifest; `strict` (default `true`) → the entry's `commands` / `agents` / `skills` / `hooks` are appended (hooks are appended, not replaced per event); `strict: false` with entry components → "Plugin has conflicting manifests"; an entry at the marketplace root (`"."`) that lists `skills` replaces the default `skills/` scan; display fields come from the entry, `version` from the manifest. Then hydrate skills / commands / agents / MCP / instructions / hooks.
 6. Plugin option `extraPluginDirs` (`{ id: "/abs/path" }`) appends more trees without a registry write.
 
-`${CLAUDE_PLUGIN_DATA}` maps to `~/.agents/plugins/data/<slug>/` and that directory is created on first use. Plugin `bin/` is prepended onto `PATH` (v1 `shell.env`, v2 `ctx.shell.hook("create.before")`) while the plugin is enabled.
+`${CLAUDE_PLUGIN_DATA}` maps to `~/.agents/plugins/data/<slug>/` (fixed, whatever the sources) and that directory is created on first use. Plugin `bin/` is prepended onto `PATH` (v1 `shell.env`, v2 `ctx.shell.hook("create.before")`) while the plugin is enabled.
 
 Malformed `installed_plugins.json`, a plugin's `plugin.json`, `hooks.json`, `.mcp.json`, or YAML frontmatter is skipped with a warning; other plugins and components still load. The OpenCode plugin `id` is `opencode-agent-plugin-support`.
 
@@ -46,7 +81,7 @@ v2 has no mutable global config object.
 | `skills/*/SKILL.md` | `ctx.skill.transform` `editor.add` | `{ id, name, description?, path, content }`. Not namespaced (kebab-case only). Skipped when `disable-model-invocation` is set. Also registered as `/plugin:skill` commands (see Commands). |
 | `commands/*.md` | `ctx.command.transform` `editor.add` | Native slash commands, plus user-invocable plugin skills as `plugin:skill`. Executor substitutes `$ARGUMENTS` and calls `ctx.session.prompt`. |
 | `agents/*.md` | `ctx.agent.transform` | See **Agents** below. |
-| `.mcp.json` / `mcpServers` | `ctx.mcp.transform` `editor.set` | Native MCP. v2 field is `disabled` (not `enabled`). |
+| `.mcp.json` / `mcpServers` (Claude) or `mcp.json` (Agent Plugins) | `ctx.mcp.transform` `editor.set` | Native MCP. v2 field is `disabled` (not `enabled`). |
 | `CLAUDE.md` / … | `ctx.session.hook("context")` | Push instruction texts onto `event.system` **every** model call (v2 context is not persisted). |
 | `hooks/hooks.json` | session / tool / permission hooks + `ctx.event.subscribe` | Command hooks only. |
 | `bin/` | `ctx.shell.hook("create.before")` | Prepend `PATH`. |
