@@ -1,4 +1,5 @@
 import { Ajv2020 } from "ajv/dist/2020.js";
+import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -575,5 +576,17 @@ describe("CLI", () => {
     const result = capture(["install-local", demoPlugin, "demo@local"], m);
     expect(result.code).toBe(0);
     expect(result.err).toMatch(/is not one of your configured sources/);
+  });
+});
+
+describe("CLI entry", () => {
+  it.skipIf(!symlinksSupported)("runs when invoked through a symlink, as npx and global installs do", () => {
+    const m = machine(env.tmp);
+    const dist = path.join(here, "..", "dist", "cli.js");
+    expect(existsSync(dist), "run `npm run build` first (npm install does it via prepare)").toBe(true);
+    const link = path.join(env.tmp(), "opencode-agent-plugin-support");
+    symlinkSync(dist, link);
+    const out = execFileSync(process.execPath, [link, "sources"], { cwd: m.cwd, env: { ...process.env, HOME: m.home }, encoding: "utf8" });
+    expect(JSON.parse(out).mode).toBe("legacy");
   });
 });

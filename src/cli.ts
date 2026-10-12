@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { discoverEnabledPlugins, loadPluginFromDirectory } from "./discover.js";
@@ -243,7 +244,8 @@ function isDirectRun(): boolean {
   const entry = process.argv[1];
   if (!entry) return false;
   try {
-    return path.resolve(entry) === fileURLToPath(import.meta.url);
+    // `npx` and global installs run the bin through a symlink; compare real paths.
+    return fs.realpathSync(entry) === fs.realpathSync(fileURLToPath(import.meta.url));
   } catch {
     return false;
   }
