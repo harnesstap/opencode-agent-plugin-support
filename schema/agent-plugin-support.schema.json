@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/harnesstap/opencode-agent-plugin-support/main/schema/agent-plugin-support.schema.json",
+  "title": "agent-plugin-support configuration",
+  "description": "User (~/.agents/agent-plugin-support.json) or project (<repo>/.agents/agent-plugin-support.json) configuration for @harnesstap/opencode-agent-plugin-support.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "URL of this schema."
+    },
+    "sources": {
+      "type": "array",
+      "description": "Directories to load plugins from, in priority order. When duplicate plugin names exist, the first source wins. Project sources come before user sources; a project entry with the same resolved path as a user entry replaces it. If no config file declares `sources`, the default is one `claude` source at ~/.agents/plugins.",
+      "items": {
+        "oneOf": [
+          {
+            "type": "string",
+            "minLength": 1,
+            "description": "Shorthand for { \"path\": <string>, \"format\": \"auto\" }."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Directory. `~` is expanded; relative paths are resolved from the directory of the config file."
+              },
+              "format": {
+                "enum": ["claude", "agent-plugins", "auto"],
+                "default": "auto",
+                "description": "`claude`: a Claude plugin tree (installed_plugins.json, known_marketplaces.json, cache/, marketplaces/). `agent-plugins`: a directory whose immediate children are Agent Plugins packages (root plugin.json). `auto`: look at each plugin's manifests."
+              },
+              "label": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                "description": "Suffix of Agent Plugins ids (<name>@<label>). Defaults to the directory name (or its parent's name for a directory called `plugins`)."
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true,
+                "description": "Set to false to switch a source off, for example in a project to turn off a user source."
+              }
+            },
+            "required": ["path"],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "enabledPlugins": {
+      "type": "object",
+      "description": "Plugin id -> true/false. Plugins are enabled unless set to false. Project keys override user keys; both override the legacy plugins.json files.",
+      "additionalProperties": {
+        "type": "boolean"
+      }
+    }
+  },
+  "additionalProperties": false
+}

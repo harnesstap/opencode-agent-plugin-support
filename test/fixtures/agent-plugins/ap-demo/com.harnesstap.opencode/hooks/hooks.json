@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"${PLUGIN_ROOT}/com.harnesstap.opencode/hooks/prompt.mjs\"" }
+        ]
+      }
+    ]
+  }
+}

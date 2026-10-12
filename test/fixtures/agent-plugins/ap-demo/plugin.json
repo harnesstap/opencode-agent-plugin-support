@@ -1,0 +1,16 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "ap-demo",
+  "version": "1.0.0",
+  "description": "Fixture Agent Plugins package with skills, MCP servers and an OpenCode extension",
+  "author": { "name": "Fixture" },
+  "keywords": ["fixture"],
+  "extensions": {
+    "com.harnesstap.opencode": {
+      "commands": {
+        "inline-hi": { "content": "Say hi to $ARGUMENTS and mention ap-inline-ok", "description": "Inline command" }
+      }
+    },
+    "com.example.other-client": { "anything": true }
+  }
+}
